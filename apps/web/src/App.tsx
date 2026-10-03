@@ -1,120 +1,52 @@
-import { useEffect, useState } from "react";
-import { type Account, type Status, sessionKey, setLiveSync, useSession, useSessionList } from "./api";
-import { SessionList } from "./SessionList";
-import { ShareDialog } from "./ShareDialog";
-import { Transcript } from "./Transcript";
-import { formatTime, projectName } from "./format";
+import { useEffect } from "react";
+import { CliApprove } from "./CliApprove";
+import { Home, LocalExplainer, NotFound } from "./Pages";
+import { Shell } from "./Shell";
+import { isLocal } from "./config";
+import { useIdentity } from "./identity";
+import { LocalSessions } from "./local/LocalSessions";
+import { type Route, navigate, useRoute } from "./router";
+import { MyShares } from "./shares/MyShares";
+import { ShareView } from "./shares/ShareView";
 
-/** Routes: `/` and `/s/<provider>/<id>`. */
-function useRoute(): [string | undefined, (key: string) => void] {
-  const parse = () => location.pathname.match(/^\/s\/(\w+\/[\w-]+)$/)?.[1];
-  const [key, setKey] = useState(parse);
-  useEffect(() => {
-    const onPop = () => setKey(parse());
-    addEventListener("popstate", onPop);
-    return () => removeEventListener("popstate", onPop);
-  }, []);
-  const navigate = (next: string) => {
-    history.pushState(null, "", `/s/${next}`);
-    setKey(next);
-  };
-  return [key, navigate];
-}
-
+/**
+ * One app for both places it runs. The local app (served by the daemon) and opticon.tv share
+ * every route; the difference is that only the local app can list this machine's sessions.
+ */
 export function App() {
-  const { sessions, status, account, shares } = useSessionList();
-  const [selected, select] = useRoute();
-  const session = useSession(selected);
-  const [sharing, setSharing] = useState(false);
+  const route = useRoute();
+  const { daemon } = useIdentity();
 
-  const meta = session.meta ?? sessions.find((s) => sessionKey(s) === selected);
-  const sharedKeys = new Set(shares.map((s) => `${s.provider}/${s.sessionId}`));
-  const share = shares.find((s) => `${s.provider}/${s.sessionId}` === selected);
   useEffect(() => {
-    document.title = meta?.title ? `${meta.title} · Opticon` : "Opticon";
-  }, [meta?.title]);
+    if (isLocal() && route.name === "home") navigate("/local", { replace: true });
+  }, [route.name]);
+  useEffect(() => {
+    if (route.name !== "local" && route.name !== "share") document.title = "Opticon";
+  }, [route.name]);
 
-  if (status === "unauthorized" || status === "offline") return <Blocked status={status} />;
-
-  return (
-    <div className="app">
-      <SessionList
-        sessions={sessions}
-        shared={sharedKeys}
-        loading={status === "loading"}
-        selected={selected}
-        onSelect={select}
-        footer={<AccountFooter account={account} />}
-      />
-      <main className="main">
-        {!selected ? (
-          <div className="empty">
-            <h2>Opticon</h2>
-            <p>Your Claude Code and Codex sessions, read straight from this machine. Pick one on the left.</p>
-          </div>
-        ) : (
-          <>
-            <header className="session-header">
-              <div className="session-title">
-                <h1>{meta?.title ?? "Untitled session"}</h1>
-                <div className="session-meta">
-                  {meta && <span className={`badge ${meta.provider}`}>{meta.provider}</span>}
-                  {meta?.cwd && <span title={meta.cwd}>{projectName(meta.cwd)}</span>}
-                  {meta?.gitBranch && <span className="mono">{meta.gitBranch}</span>}
-                  {meta?.startedAt && <span>{formatTime(meta.startedAt)}</span>}
-                </div>
-              </div>
-              {share && (
-                <a className="share-badge" href={share.url} target="_blank" rel="noreferrer" title={share.url}>
-                  Shared{share.viewers > 0 ? ` · ${share.viewers} watching` : ""}
-                </a>
-              )}
-              <button type="button" className="button" disabled={session.status !== "ready"} onClick={() => setSharing(true)}>
-                {share ? "Manage…" : "Share…"}
-              </button>
-            </header>
-            <Transcript key={selected} events={session.events} status={session.status} />
-            {sharing && <ShareDialog sessionKey={selected} share={share} account={account} onClose={() => setSharing(false)} />}
-          </>
-        )}
-      </main>
-    </div>
-  );
+  if (daemon && (daemon.status === "unauthorized" || daemon.status === "offline")) return <Blocked status={daemon.status} />;
+  if (route.name === "local" && isLocal()) return <LocalSessions route={route} selected={route.key} />;
+  return <Shell route={route}>{page(route)}</Shell>;
 }
 
-function AccountFooter({ account }: { account?: Account }) {
-  // Optimistic: show the new value at once; the server's value wins when it arrives.
-  const [liveSync, setLocalLiveSync] = useState(account?.liveSync ?? true);
-  useEffect(() => setLocalLiveSync(account?.liveSync ?? true), [account?.liveSync]);
-  if (!account?.configured) return null;
-  if (!account.signedIn) {
-    return (
-      <p className="hint">
-        Run <code>opticon login</code> to share sessions.
-      </p>
-    );
+function page(route: Route) {
+  switch (route.name) {
+    case "home":
+      return isLocal() ? null : <Home />;
+    case "local":
+      return <LocalExplainer />;
+    case "share":
+      return <ShareView key={route.slug} slug={route.slug} />;
+    case "shares":
+      return <MyShares />;
+    case "cli":
+      return <CliApprove code={route.code} />;
+    case "not_found":
+      return <NotFound />;
   }
-  return (
-    <div className="account">
-      <span className="truncate">
-        Signed in as <strong>{account.login}</strong>
-      </span>
-      <label className="toggle" title="Stream new messages to shared sessions while someone is viewing">
-        <input
-          type="checkbox"
-          checked={liveSync}
-          onChange={(e) => {
-            setLocalLiveSync(e.target.checked);
-            void setLiveSync(e.target.checked);
-          }}
-        />
-        Live sync shared sessions
-      </label>
-    </div>
-  );
 }
 
-function Blocked({ status }: { status: Status }) {
+function Blocked({ status }: { status: "unauthorized" | "offline" }) {
   return (
     <div className="blocked">
       <h2>{status === "offline" ? "The Opticon daemon isn't running" : "Not connected to this machine"}</h2>

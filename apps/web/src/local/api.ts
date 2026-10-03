@@ -31,8 +31,15 @@ type ListMessage =
   | { type: "change"; upserted: SessionMeta[]; removed: string[] }
   | { type: "shares"; account: Account; shares: MyShare[] };
 
-/** Live list of local sessions (newest first), plus sharing state from the daemon. */
-export function useSessionList() {
+export interface Daemon {
+  sessions: SessionMeta[];
+  status: Status;
+  account?: Account;
+  shares: MyShare[];
+}
+
+/** Live list of local sessions (newest first), plus sharing state from the daemon. One per app. */
+export function useDaemonState(): Daemon {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [status, setStatus] = useState<Status>("loading");
   const [sharing, setSharing] = useState<{ account?: Account; shares: MyShare[] }>({ shares: [] });

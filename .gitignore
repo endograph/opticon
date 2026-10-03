@@ -6,3 +6,15 @@ dist/
 !.env.example
 .convex-local/
 dist-hosted/
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars*
+# Convex CLI local state
+.convex/
+# Keys and certificates
+*.pem
+*.key
+*.p12
+
+# Local notes (former AGENTS.md)
+*.local.md

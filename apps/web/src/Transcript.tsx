@@ -2,7 +2,7 @@ import type { MessageEvent, NoticeEvent, SessionEvent, ThinkingEvent, ToolEvent 
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Status } from "./api";
+import type { Status } from "./local/api";
 
 const PAGE = 150;
 const COLLAPSED_ACTIVITY = 4;

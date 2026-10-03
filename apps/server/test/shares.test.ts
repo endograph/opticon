@@ -177,3 +177,77 @@ describe("cli login", () => {
     expect(await poll()).toEqual({ status: "expired" });
   });
 });
+
+describe("GitHub token refresh", () => {
+  test("refreshes an expired token and uses the rotated token for membership requests", async () => {
+    const t = convexTest(schema, modules);
+    const token = await signIn(t, "viewer", {
+      githubToken: "expired", githubTokenExpiresAt: Date.now() - 1,
+      githubRefreshToken: "refresh-old", githubRefreshTokenExpiresAt: Date.now() + 86400_000,
+    });
+    const original = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("access_token")) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ grant_type: "refresh_token", refresh_token: "refresh-old" });
+        return Response.json({ access_token: "fresh", expires_in: 28800, refresh_token: "refresh-new", refresh_token_expires_in: 15897600 });
+      }
+      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer fresh");
+      return Response.json(url.includes("/teams") ? [{ slug: "platform", organization: { login: "Acme" } }] : [{ login: "Acme" }]);
+    }) as typeof fetch;
+    try {
+      expect(await t.action(api.access.refreshMemberships, { token })).toEqual({ orgs: ["acme"], teams: ["acme/platform"] });
+      const user = await t.run((ctx) => ctx.db.query("users").first());
+      expect(user).toMatchObject({ githubToken: "fresh", githubRefreshToken: "refresh-new" });
+      expect(user?.githubRefreshUntil).toBeUndefined();
+      expect(user?.githubTokenExpiresAt).toBeGreaterThan(Date.now());
+      expect(requests).toHaveLength(3);
+      await t.action(api.access.refreshMemberships, { token });
+      expect(requests.filter((url) => url.includes("access_token"))).toHaveLength(1);
+    } finally { globalThis.fetch = original; }
+  });
+
+  test("failed refresh preserves membership and releases the refresh lock", async () => {
+    const t = convexTest(schema, modules);
+    const token = await signIn(t, "viewer", {
+      githubToken: "expired", githubTokenExpiresAt: Date.now() - 1,
+      githubRefreshToken: "refresh", orgs: ["acme"], membershipCheckedAt: 123,
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({ error: "bad_refresh_token" })) as unknown as typeof fetch;
+    try {
+      expect(await t.action(api.access.refreshMemberships, { token })).toBeNull();
+      expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({
+        orgs: ["acme"], membershipCheckedAt: 123, githubToken: "expired",
+      });
+      const user = (await t.run((ctx) => ctx.db.query("users").first()))!;
+      expect(await t.mutation(internal.auth.claimGithubRefresh, { userId: user._id, refreshToken: "refresh" })).toBe(true);
+    } finally { globalThis.fetch = original; }
+  });
+
+  test("only one concurrent refresh can claim a token; a new sign-in supersedes it", async () => {
+    const t = convexTest(schema, modules);
+    const userId = await t.mutation(internal.auth.upsertUser, { githubId: 123, login: "viewer", githubToken: "old", githubRefreshToken: "r1" });
+    expect(await t.mutation(internal.auth.claimGithubRefresh, { userId, refreshToken: "r1" })).toBe(true);
+    expect(await t.mutation(internal.auth.claimGithubRefresh, { userId, refreshToken: "r1" })).toBe(false);
+    await t.mutation(internal.auth.upsertUser, { githubId: 123, login: "viewer", githubToken: "new-login", githubRefreshToken: "r2" });
+    expect(await t.mutation(internal.auth.finishGithubRefresh, {
+      userId, previousRefreshToken: "r1", credentials: { token: "stale", expiresAt: 1000, refreshToken: "stale-r", refreshExpiresAt: 2000 },
+    })).toBe(false);
+    expect(await t.run((ctx) => ctx.db.get(userId))).toMatchObject({ githubToken: "new-login", githubRefreshToken: "r2" });
+  });
+
+  test("membership API failure never saves a partial membership list", async () => {
+    const t = convexTest(schema, modules);
+    const token = await signIn(t, "viewer", { githubToken: "valid", orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => String(input).includes("/teams")
+      ? new Response("Unavailable", { status: 503 }) : Response.json([{ login: "Other" }])) as typeof fetch;
+    try {
+      await expect(t.action(api.access.refreshMemberships, { token })).rejects.toThrow(/503/);
+      expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({ orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
+    } finally { globalThis.fetch = original; }
+  });
+});

@@ -5,7 +5,10 @@ import { PROTOCOL_VERSION } from "@opticon/core";
 import { DAEMON_FILE, DEFAULT_PORT, LOG_FILE, OPTICON_HOME, TOKEN_FILE, selfCommand } from "../paths";
 import { startServer } from "./server";
 
-export const VERSION = "0.0.1";
+declare const OPTICON_VERSION: string | undefined;
+
+/** Set by `--define` in release builds; "dev" when running from source. */
+export const VERSION = typeof OPTICON_VERSION === "string" ? OPTICON_VERSION : "dev";
 
 interface DaemonInfo {
   pid: number;

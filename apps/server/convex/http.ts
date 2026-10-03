@@ -6,7 +6,7 @@ import { randomToken, sha256 } from "./lib";
 
 /**
  * Environment:
- *   OPTICON_WEB_URL        hosted web origin, e.g. https://opticon.com. Login redirects must stay on it.
+ *   OPTICON_WEB_URL        hosted web origin, e.g. https://opticon.tv. Login redirects must stay on it.
  *   GITHUB_CLIENT_ID       GitHub OAuth app
  *   GITHUB_CLIENT_SECRET
  *   OPTICON_DEV_AUTH=1     enables /auth/dev, which signs in as any login without GitHub. Never set in production.
@@ -70,7 +70,13 @@ http.route({
         code,
       }),
     });
-    const { access_token: githubToken } = (await exchange.json()) as { access_token?: string };
+    const {
+      access_token: githubToken, expires_in: expiresIn,
+      refresh_token: refreshToken, refresh_token_expires_in: refreshExpiresIn,
+    } = (await exchange.json()) as {
+      access_token?: string; expires_in?: number;
+      refresh_token?: string; refresh_token_expires_in?: number;
+    };
     if (!githubToken) return new Response("GitHub login failed.", { status: 400 });
 
     const profile = await fetch("https://api.github.com/user", {
@@ -84,6 +90,9 @@ http.route({
       name: gh.name ?? undefined,
       avatarUrl: gh.avatar_url,
       githubToken,
+      githubTokenExpiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+      githubRefreshToken: refreshToken,
+      githubRefreshTokenExpiresAt: refreshExpiresIn ? Date.now() + refreshExpiresIn * 1000 : undefined,
     });
     return withSession(redirect, await issueToken(ctx, userId, "web"));
   }),

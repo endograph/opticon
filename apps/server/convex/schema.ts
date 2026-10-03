@@ -42,6 +42,10 @@ export default defineSchema({
     avatarUrl: v.optional(v.string()),
     /** OAuth token with read:org, used only to check this user's own org and team membership. */
     githubToken: v.optional(v.string()),
+    githubTokenExpiresAt: v.optional(v.number()),
+    githubRefreshToken: v.optional(v.string()),
+    githubRefreshTokenExpiresAt: v.optional(v.number()),
+    githubRefreshUntil: v.optional(v.number()),
     /** Cached membership, refreshed by access.refreshMemberships. */
     orgs: v.optional(v.array(v.string())),
     teams: v.optional(v.array(v.string())),

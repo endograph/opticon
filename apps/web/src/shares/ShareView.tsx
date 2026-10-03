@@ -3,14 +3,15 @@ import { api } from "@opticon/server/api";
 import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
 import { Transcript } from "../Transcript";
+import { isLocal } from "../config";
 import { formatTime } from "../format";
-import { SignInButton } from "./main";
-import { type HostedConfig, signOut, useSessionToken } from "./session";
+import { SignInButton, useToken } from "../identity";
+import { signOut } from "../session";
 
 const HEARTBEAT_MS = 15_000;
 
-export function ShareView({ slug }: { slug: string; config: HostedConfig }) {
-  const token = useSessionToken();
+export function ShareView({ slug }: { slug: string }) {
+  const token = useToken();
   const view = useQuery(api.shares.view, { slug, token });
   const ok = view?.status === "ok";
   const events = useShareEvents(slug, token, ok);
@@ -46,11 +47,13 @@ export function ShareView({ slug }: { slug: string; config: HostedConfig }) {
             your org hasn't approved Opticon yet, ask the owner or an org admin.
           </>
         )}
-        <div className="actions">
-          <button type="button" className="button" onClick={signOut}>
-            Use a different account
-          </button>
-        </div>
+        {!isLocal() && (
+          <div className="actions">
+            <button type="button" className="button" onClick={signOut}>
+              Use a different account
+            </button>
+          </div>
+        )}
       </Message>
     );
   }
@@ -58,7 +61,7 @@ export function ShareView({ slug }: { slug: string; config: HostedConfig }) {
   const { share, owner, viewers } = view;
   const live = Date.now() - share.updatedAt < 120_000;
   return (
-    <main className="main hosted-share">
+    <>
       <header className="session-header">
         <div className="session-title">
           <h1>{share.title ?? "Untitled session"}</h1>
@@ -80,16 +83,16 @@ export function ShareView({ slug }: { slug: string; config: HostedConfig }) {
         </span>
       </header>
       <Transcript events={(events ?? []) as SessionEvent[]} status={events ? "ready" : "loading"} />
-    </main>
+    </>
   );
 }
 
 function Message({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <main className="hosted-page narrow center">
+    <div className="page narrow center">
       <h2>{title}</h2>
       <div className="dim">{children}</div>
-    </main>
+    </div>
   );
 }
 

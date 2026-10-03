@@ -1,18 +1,17 @@
 import { api } from "@opticon/server/api";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
-import { SignInButton } from "./main";
-import { type HostedConfig, useSessionToken } from "./session";
+import { SignInButton, useToken } from "./identity";
 
 /** Second half of `opticon login`: the user confirms the code shown in their terminal. */
-export function CliApprove({ code }: { code: string; config: HostedConfig }) {
-  const token = useSessionToken();
+export function CliApprove({ code }: { code: string }) {
+  const token = useToken();
   const login = useQuery(api.auth.cliLogin, { token, userCode: code });
   const approve = useMutation(api.auth.approveCliLogin);
   const [error, setError] = useState<string>();
 
   return (
-    <main className="hosted-page narrow center">
+    <div className="page narrow center">
       {!login ? (
         <p className="hint">Loading…</p>
       ) : login.status === "expired" ? (
@@ -48,6 +47,6 @@ export function CliApprove({ code }: { code: string; config: HostedConfig }) {
           {error && <p className="notice error">{error}</p>}
         </>
       )}
-    </main>
+    </div>
   );
 }

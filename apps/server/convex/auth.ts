@@ -95,6 +95,9 @@ export const upsertUser = internalMutation({
     name: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
     githubToken: v.optional(v.string()),
+    githubTokenExpiresAt: v.optional(v.number()),
+    githubRefreshToken: v.optional(v.string()),
+    githubRefreshTokenExpiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const login = args.login.toLowerCase();
@@ -104,7 +107,13 @@ export const upsertUser = internalMutation({
       .unique();
     if (existing) {
       // A new token may have different org grants, so cached membership is no longer trusted.
-      await ctx.db.patch(existing._id, { ...args, login, membershipCheckedAt: undefined });
+      await ctx.db.patch(existing._id, {
+        ...args, login, membershipCheckedAt: undefined,
+        githubTokenExpiresAt: args.githubTokenExpiresAt,
+        githubRefreshToken: args.githubRefreshToken,
+        githubRefreshTokenExpiresAt: args.githubRefreshTokenExpiresAt,
+        githubRefreshUntil: undefined,
+      });
       return existing._id;
     }
     return ctx.db.insert("users", { ...args, login });
@@ -150,7 +159,47 @@ export const githubToken = internalQuery({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     const user = await userForToken(ctx, token);
-    return user ? { userId: user._id, githubToken: user.githubToken } : null;
+    return user ? {
+      userId: user._id, githubToken: user.githubToken,
+      expiresAt: user.githubTokenExpiresAt,
+      refreshToken: user.githubRefreshToken,
+      refreshExpiresAt: user.githubRefreshTokenExpiresAt,
+    } : null;
+  },
+});
+
+/** Serialize refreshes: GitHub invalidates the old refresh token after use. */
+export const claimGithubRefresh = internalMutation({
+  args: { userId: v.id("users"), refreshToken: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { userId, refreshToken }) => {
+    const user = await ctx.db.get(userId);
+    if (!user || user.githubRefreshToken !== refreshToken || (user.githubRefreshUntil ?? 0) > Date.now()) return false;
+    await ctx.db.patch(userId, { githubRefreshUntil: Date.now() + 60_000 });
+    return true;
+  },
+});
+
+/** A new sign-in wins over an in-flight refresh from the previous sign-in. */
+export const finishGithubRefresh = internalMutation({
+  args: {
+    userId: v.id("users"), previousRefreshToken: v.string(),
+    credentials: v.optional(v.object({
+      token: v.string(), expiresAt: v.number(), refreshToken: v.string(), refreshExpiresAt: v.number(),
+    })),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, { userId, previousRefreshToken, credentials }) => {
+    const user = await ctx.db.get(userId);
+    if (!user || user.githubRefreshToken !== previousRefreshToken) return false;
+    await ctx.db.patch(userId, {
+      githubRefreshUntil: undefined,
+      ...(credentials ? {
+        githubToken: credentials.token, githubTokenExpiresAt: credentials.expiresAt,
+        githubRefreshToken: credentials.refreshToken, githubRefreshTokenExpiresAt: credentials.refreshExpiresAt,
+      } : {}),
+    });
+    return true;
   },
 });
 

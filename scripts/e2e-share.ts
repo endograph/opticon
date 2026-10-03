@@ -93,8 +93,8 @@ try {
   const token = (await Bun.file(join(dir, "home/local-token")).text()).trim();
   let shareUrl = "";
   await step("share from local ui", async () => {
-    await local.goto(`http://127.0.0.1:${DAEMON_PORT}/auth?token=${token}&next=/s/${KEY}`);
-    await local.waitForSelector("text=Signed in as");
+    await local.goto(`http://127.0.0.1:${DAEMON_PORT}/auth?token=${token}&next=/local/${KEY}`);
+    await local.waitForSelector("text=via opticon login");
     await local.click("text=Share…");
     await local.waitForSelector("text=1 item redacted");
     await local.click("text=Create share link");
@@ -150,6 +150,25 @@ try {
     if (await friend.locator(`text=held ${RUN}`).count()) throw new Error("streamed while live sync was off");
     await local.check("text=Live sync shared sessions");
     await friend.waitForSelector(`text=held ${RUN}`, { timeout: 15_000 });
+  });
+
+  await step("my shares lists it on the hosted site", async () => {
+    await owner.goto("http://127.0.0.1:4747/shares");
+    await owner.waitForSelector(".share-row:has-text('first message')");
+    return (await owner.textContent(".share-row .session-meta")) ?? "";
+  });
+
+  await step("hosted local sessions page explains instead of listing", async () => {
+    await viewer.goto("http://127.0.0.1:4747/local");
+    await viewer.waitForSelector("text=Local sessions live on your machine");
+    if (await viewer.locator(".session-item").count()) throw new Error("hosted site listed local sessions");
+  });
+
+  await step("share links open inside the local app", async () => {
+    await local.goto(`http://127.0.0.1:${DAEMON_PORT}${new URL(shareUrl).pathname}`);
+    await local.waitForSelector(`text=held ${RUN}`);
+    await local.goto(`http://127.0.0.1:${DAEMON_PORT}/local/${KEY}`);
+    await local.waitForSelector("text=Manage…");
   });
 
   await step("unsharing deletes the server copy", async () => {

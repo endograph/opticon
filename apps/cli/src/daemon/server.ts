@@ -1,6 +1,8 @@
 import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectForShare } from "@opticon/core";
 import index from "@opticon/web/index.html";
+import { endpoints, readAuth } from "../account";
 import { type SessionKey, SessionStore } from "./store";
+import { tailnetHostname } from "../tailscale";
 import { ShareSync } from "./sync";
 
 const COOKIE = "opticon_local";
@@ -21,11 +23,17 @@ export async function startServer(options: DaemonOptions) {
   const sync = new ShareSync(store);
   await sync.start();
   const allowedHosts = new Set([`127.0.0.1:${options.port}`, `localhost:${options.port}`]);
+  // `opticon web --tailscale` proxies through `tailscale serve`, which keeps the Host header.
+  // This machine's MagicDNS name is controlled by Tailscale, not by an attacker, so allowing it
+  // doesn't reopen DNS rebinding. Requests still need the cookie.
+  const tailnetHost = await tailnetHostname();
+  const hostAllowed = (host: string) =>
+    allowedHosts.has(host) || (!!tailnetHost && (host === tailnetHost || host.startsWith(`${tailnetHost}:`)));
 
   const guard =
     (handler: (req: Bun.BunRequest<any>) => Response | Promise<Response>) =>
     (req: Bun.BunRequest<any>): Response | Promise<Response> => {
-      if (!allowedHosts.has(req.headers.get("host") ?? "")) return new Response("Bad host", { status: 421 });
+      if (!hostAllowed(req.headers.get("host") ?? "")) return new Response("Bad host", { status: 421 });
       if (req.cookies.get(COOKIE) !== options.token) return Response.json({ error: "unauthorized" }, { status: 401 });
       // A custom header can't be sent cross-origin without a CORS preflight, which we never grant.
       if (req.method !== "GET" && req.headers.get("x-opticon") !== "1") return Response.json({ error: "csrf" }, { status: 403 });
@@ -50,6 +58,19 @@ export async function startServer(options: DaemonOptions) {
     idleTimeout: 60,
     routes: {
       "/*": index,
+
+      /** Same shape opticon.tv serves statically, so one web app runs in both places. */
+      "/config.json": () => {
+        const ep = endpoints();
+        return Response.json({ mode: "local", convexUrl: ep?.convexUrl, siteUrl: ep?.siteUrl, webUrl: ep?.webUrl });
+      },
+
+      /**
+       * The CLI's login, for this cookie-gated page to talk to Convex directly (share viewer,
+       * My shares). It grants nothing the local API doesn't already: that API can create and
+       * delete shares with the same token.
+       */
+      "/api/convex-token": guard(async () => Response.json({ token: (await readAuth())?.token ?? null })),
 
       "/api/health": () => Response.json({ protocol: PROTOCOL_VERSION, version: options.version, pid: process.pid }),
 

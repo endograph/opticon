@@ -1,7 +1,7 @@
 import type { Provider, SessionMeta } from "@opticon/core";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { dayLabel, isLive, projectName, relativeTime } from "../format";
 import { sessionKey } from "./api";
-import { dayLabel, isLive, projectName, relativeTime } from "./format";
 
 const PAGE = 200;
 
@@ -9,7 +9,6 @@ export function SessionList(props: {
   sessions: SessionMeta[];
   shared: Set<string>;
   loading: boolean;
-  footer?: ReactNode;
   selected?: string;
   onSelect: (key: string) => void;
 }) {
@@ -35,7 +34,7 @@ export function SessionList(props: {
   }
 
   return (
-    <nav className="sidebar">
+    <>
       <div className="sidebar-top">
         <input
           className="search"
@@ -90,8 +89,7 @@ export function SessionList(props: {
           </button>
         )}
       </div>
-      {props.footer && <div className="sidebar-footer">{props.footer}</div>}
-    </nav>
+    </>
   );
 }
 

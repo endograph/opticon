@@ -17,9 +17,9 @@ export interface Endpoints {
 
 export function endpoints(): Endpoints | undefined {
   const dev = !!process.env.OPTICON_DEV;
-  const convexUrl = process.env.OPTICON_CONVEX_URL ?? (dev ? "http://127.0.0.1:3310" : undefined);
-  const siteUrl = process.env.OPTICON_CONVEX_SITE_URL ?? (dev ? "http://127.0.0.1:3311" : undefined);
-  const webUrl = process.env.OPTICON_WEB_URL ?? (dev ? "http://127.0.0.1:4747" : "https://opticon.com");
+  const convexUrl = process.env.OPTICON_CONVEX_URL ?? (dev ? "http://127.0.0.1:3310" : "https://bold-ostrich-850.convex.cloud");
+  const siteUrl = process.env.OPTICON_CONVEX_SITE_URL ?? (dev ? "http://127.0.0.1:3311" : "https://bold-ostrich-850.convex.site");
+  const webUrl = process.env.OPTICON_WEB_URL ?? (dev ? "http://127.0.0.1:4747" : "https://opticon.tv");
   return convexUrl && siteUrl ? { convexUrl, siteUrl, webUrl } : undefined;
 }
 
@@ -57,9 +57,15 @@ export async function login(open: (url: string) => Promise<boolean>): Promise<Au
   if (!start.ok) throw new Error(`Login failed to start (${start.status}).`);
   const { userCode, pollSecret, verifyUrl } = (await start.json()) as { userCode: string; pollSecret: string; verifyUrl: string };
 
-  console.log(`\nYour code: ${userCode}\n`);
-  const opened = await open(verifyUrl);
-  console.log(opened ? `Confirm it in the browser window that just opened.` : `Open ${verifyUrl} and confirm the code.`);
+  // Sign in with GitHub first, then land on the approval page. The dev stack has no GitHub,
+  // and its approval page offers its own sign-in.
+  const link = process.env.OPTICON_DEV
+    ? verifyUrl
+    : `${ep.siteUrl}/auth/github/start?redirect=${encodeURIComponent(verifyUrl)}`;
+  console.log(`\nSign in with GitHub and approve this login:\n${link}\n\nCheck that the page shows the code ${userCode}.`);
+  // Over SSH a browser would open on the remote machine's screen, not yours.
+  if (!process.env.SSH_CONNECTION && (await open(link))) console.log("(Opened in your browser.)");
+  console.log("\nWaiting for approval…");
 
   const deadline = Date.now() + 10 * 60_000;
   while (Date.now() < deadline) {

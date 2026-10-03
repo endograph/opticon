@@ -12,7 +12,8 @@
     "opticon": "bun apps/cli/src/main.ts",
     "dev": "OPTICON_DEV=1 bun --watch apps/cli/src/main.ts daemon",
     "convex": "bun scripts/convex-local.ts --watch",
-    "e2e": "bun scripts/e2e-share.ts"
+    "e2e": "bun scripts/e2e-share.ts",
+    "deploy:web": "bun run --filter @opticon/web build:hosted && bunx wrangler@4.147.0 pages deploy apps/web/dist-hosted --project-name opticon --branch main"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",

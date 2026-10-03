@@ -1,13 +1,7 @@
 import { useSyncExternalStore } from "react";
+import { config } from "./config";
 
-/** Deployment config, served as /config.json (dynamically in dev, statically in production). */
-export interface HostedConfig {
-  convexUrl: string;
-  siteUrl: string;
-  /** Show the passwordless dev login instead of GitHub. Only true against a dev backend. */
-  devAuth?: boolean;
-}
-
+/** Browser sign-in for opticon.tv. The local app uses the CLI's login instead (see identity.tsx). */
 const KEY = "opticon_session";
 const listeners = new Set<() => void>();
 
@@ -42,7 +36,7 @@ export function useSessionToken(): string | undefined {
   );
 }
 
-export function signIn(config: HostedConfig, devLogin?: string): void {
+export function signIn(devLogin?: string): void {
   const redirect = encodeURIComponent(location.href);
   location.href = config.devAuth
     ? `${config.siteUrl}/auth/dev?login=${encodeURIComponent(devLogin ?? "dev")}&redirect=${redirect}`

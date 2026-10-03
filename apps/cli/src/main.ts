@@ -13,11 +13,15 @@ import { api } from "@opticon/server/api";
 import { ConvexHttpClient } from "convex/browser";
 import { clearAuth, endpoints, login, readAuth } from "./account";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
+import { DEFAULT_TAILSCALE_PORT, serveOnTailnet, stopServing } from "./tailscale";
 
 const HELP = `opticon ${VERSION} (protocol v${PROTOCOL_VERSION})
 
 Usage:
   opticon web                      Open your sessions in the browser (starts the daemon if needed)
+  opticon web --tailscale          Serve them to your other tailnet devices over HTTPS instead
+                                   [--tailscale-port N] (default ${DEFAULT_TAILSCALE_PORT}); --tailscale off to stop
+  opticon web --no-open            Print the link instead of opening a browser
   opticon login                    Sign in with GitHub to share sessions
   opticon logout                   Sign out on this machine
   opticon whoami                   Show who you're signed in as
@@ -26,6 +30,7 @@ Usage:
   opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
   opticon show <id> [--shared]     Print a transcript (--shared: exactly what sharing would upload)
   opticon watch <id>               Print a transcript, then follow it live
+  opticon version                  Print the version
 `;
 
 const [command, ...args] = process.argv.slice(2);
@@ -69,15 +74,33 @@ switch (command) {
   case "watch":
     await follow(requireArg(args[0]));
     break;
+  case "version":
+  case "--version":
+    console.log(VERSION);
+    break;
   default:
     process.stdout.write(HELP);
     process.exit(command && command !== "help" ? 1 : 0);
 }
 
 async function web() {
+  const tailscale = args.includes("--tailscale");
+  const tailscalePort = Number(flag("--tailscale-port") ?? DEFAULT_TAILSCALE_PORT);
+  if (tailscale && args[args.indexOf("--tailscale") + 1] === "off") {
+    await stopServing(tailscalePort);
+    console.log(`Stopped serving opticon on the tailnet (port ${tailscalePort}).`);
+    return;
+  }
   const { port } = await ensureDaemon();
-  const url = `http://127.0.0.1:${port}/auth?token=${encodeURIComponent(await localToken())}`;
-  console.log((await openUrl(url)) ? `Opened http://127.0.0.1:${port}` : `Open this URL in your browser:\n${url}`);
+  const base = tailscale ? await serveOnTailnet(port, tailscalePort) : `http://127.0.0.1:${port}`;
+  const url = `${base}/auth?token=${encodeURIComponent(await localToken())}`;
+  if (tailscale) {
+    console.log(`Serving on your tailnet only (not public). Open this on any of your devices:\n${url}`);
+    console.log(`\nThe link contains this machine's access token; don't share it. Stop with: opticon web --tailscale off`);
+    return;
+  }
+  if (!args.includes("--no-open") && (await openUrl(url))) console.log(`Opened ${base}`);
+  else console.log(`Open this URL in your browser:\n${url}`);
 }
 
 async function openUrl(url: string): Promise<boolean> {

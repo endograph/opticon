@@ -5,7 +5,7 @@
   "scripts": {
     "typecheck": "tsc -p .",
     "build": "bun build ./index.html --outdir dist --minify",
-    "build:hosted": "bun build ./hosted.html --outdir dist-hosted --minify",
+    "build:hosted": "rm -rf dist-hosted && bun build ./index.html --outdir dist-hosted --public-path / --minify && bun ../../scripts/prepare-hosted.ts",
     "dev:hosted": "bun --hot hosted-server.ts"
   },
   "dependencies": {

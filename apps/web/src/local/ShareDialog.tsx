@@ -1,7 +1,8 @@
-import type { SessionEvent, ShareAccess } from "@opticon/core";
+import type { SessionEvent } from "@opticon/core";
 import { useEffect, useRef, useState } from "react";
 import { type Account, type MyShare, type SharePreview, createShare, deleteShare, fetchSharePreview } from "./api";
-import { Transcript } from "./Transcript";
+import { useAccessEditor } from "../AccessEditor";
+import { Transcript } from "../Transcript";
 
 const RULE_LABELS: Record<string, string> = {
   "private-key": "private keys",
@@ -20,9 +21,6 @@ const RULE_LABELS: Record<string, string> = {
   "high-entropy": "random-looking strings",
 };
 
-const list = (values: string[]) => values.join(", ");
-const parse = (text: string) => text.split(/[\s,]+/).filter(Boolean);
-
 /**
  * Shows exactly what sharing uploads (after projection and redaction), lets the owner choose who
  * can open it, and manages an existing share.
@@ -34,20 +32,12 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [anyone, setAnyone] = useState(share?.access.anyone ?? true);
-  const [users, setUsers] = useState(list(share?.access.users ?? []));
-  const [orgs, setOrgs] = useState(list(share?.access.orgs ?? []));
-  const [teams, setTeams] = useState(list(share?.access.teams ?? []));
+  const { access, empty: restrictedToNobody, editor } = useAccessEditor(share?.access);
 
   useEffect(() => {
     dialog.current?.showModal();
     fetchSharePreview(props.sessionKey).then(setPreview, (e: Error) => setError(e.message));
   }, [props.sessionKey]);
-
-  const access: ShareAccess = anyone
-    ? { anyone: true, users: [], orgs: [], teams: [] }
-    : { anyone: false, users: parse(users), orgs: parse(orgs), teams: parse(teams) };
-  const restrictedToNobody = !anyone && !access.users.length && !access.orgs.length && !access.teams.length;
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -107,43 +97,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
           </div>
         )}
 
-        {canShare && (
-          <section className="share-access">
-            <label className="radio">
-              <input type="radio" checked={anyone} onChange={() => setAnyone(true)} />
-              <span>
-                <strong>Anyone with the link</strong>
-                <span className="dim"> · no sign-in needed</span>
-              </span>
-            </label>
-            <label className="radio">
-              <input type="radio" checked={!anyone} onChange={() => setAnyone(false)} />
-              <span>
-                <strong>Only people I choose</strong>
-                <span className="dim"> · viewers sign in with GitHub</span>
-              </span>
-            </label>
-            {!anyone && (
-              <div className="access-fields">
-                <label>
-                  People
-                  <input value={users} onChange={(e) => setUsers(e.target.value)} placeholder="octocat, hubot" />
-                </label>
-                <label>
-                  Organizations
-                  <input value={orgs} onChange={(e) => setOrgs(e.target.value)} placeholder="acme" />
-                </label>
-                <label>
-                  Teams
-                  <input value={teams} onChange={(e) => setTeams(e.target.value)} placeholder="acme/platform" />
-                </label>
-                <p className="hint">
-                  Org and team access only works for orgs that allow Opticon. Org admins may need to approve it first.
-                </p>
-              </div>
-            )}
-          </section>
-        )}
+        {canShare && editor}
       </div>
 
       {error && <p className="notice error">{error}</p>}
