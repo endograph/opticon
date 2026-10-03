@@ -10,7 +10,8 @@
     "test": "bun test",
     "typecheck": "bun run --filter '*' typecheck",
     "opticon": "bun apps/cli/src/main.ts",
-    "dev": "OPTICON_DEV=1 bun --watch apps/cli/src/main.ts daemon"
+    "dev": "OPTICON_DEV=1 bun --watch apps/cli/src/main.ts daemon",
+    "convex": "bun scripts/convex-local.ts --watch"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",

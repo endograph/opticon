@@ -1,15 +1,12 @@
+import { MAX_SHARED_TEXT, type SharedEvent } from "./protocol";
 import { type RedactionFinding, redact } from "./redact";
-import type { SessionEvent, ToolCategory, ToolStatus } from "./types";
+import { truncate } from "./text";
+import type { SessionEvent } from "./types";
 
 /**
- * What a shared session contains. Built on the daemon so that anything not listed here
- * (thinking, tool inputs and outputs, local summaries) never leaves the machine.
+ * Builds the shared copy of a session on the daemon. Thinking, tool inputs and outputs, and
+ * local summaries are dropped here, so they never leave the machine.
  */
-export type SharedEvent =
-  | { kind: "message"; id: string; timestamp?: string; role: "user" | "assistant"; text: string }
-  | { kind: "tool"; id: string; timestamp?: string; category: ToolCategory; name: string; status: ToolStatus }
-  | { kind: "notice"; id: string; timestamp?: string; level: "info" | "error"; text: string };
-
 export interface ShareProjection {
   events: SharedEvent[];
   findings: RedactionFinding[];
@@ -23,7 +20,7 @@ export function projectForShare(events: Iterable<SessionEvent>): ShareProjection
     if (!shared) continue;
     if (shared.kind !== "tool") {
       const { text, findings } = redact(shared.text);
-      shared.text = text;
+      shared.text = truncate(text, MAX_SHARED_TEXT);
       for (const f of findings) totals.set(f.rule, (totals.get(f.rule) ?? 0) + f.count);
     }
     out.push(shared);

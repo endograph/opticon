@@ -1,0 +1,19 @@
+{
+  "name": "@opticon/server",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./convex/_generated/api.js",
+    "./convex/*": "./convex/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p convex && tsc -p test"
+  },
+  "dependencies": {
+    "@opticon/core": "workspace:*",
+    "convex": "^1.46.0"
+  },
+  "devDependencies": {
+    "convex-test": "^0.0.60"
+  }
+}

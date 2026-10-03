@@ -1,3 +1,4 @@
+export * from "./protocol";
 export * from "./types";
 export * from "./discover";
 export * from "./tail";

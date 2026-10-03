@@ -1,7 +1,8 @@
-export type Provider = "claude" | "codex";
+import type { ToolCategory, ToolStatus } from "./protocol";
 
-/** Bump on any breaking change to the daemon <-> server wire format. Mismatches are rejected, not negotiated. */
-export const PROTOCOL_VERSION = 1;
+export type { ToolCategory, ToolStatus } from "./protocol";
+
+export type Provider = "claude" | "codex";
 
 export interface SessionMeta {
   provider: Provider;
@@ -14,9 +15,6 @@ export interface SessionMeta {
   startedAt?: string;
   updatedAt?: string;
 }
-
-export type ToolCategory = "tool" | "mcp" | "skill" | "plugin" | "subagent";
-export type ToolStatus = "running" | "ok" | "error";
 
 interface EventBase {
   /** Stable within a session. A later event with the same id replaces the earlier one. */
