@@ -11,6 +11,7 @@ const MAX_OUTPUT = 20_000;
 export function createCodexParser(path: string, title?: string): SessionParser {
   const id = path.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/)?.[1] ?? path;
   const meta: SessionMeta = { provider: "codex", id, path, title };
+  let sawMeta = false;
 
   function push(line: string): SessionEvent[] {
     const record = parseJson(line);
@@ -23,9 +24,13 @@ export function createCodexParser(path: string, title?: string): SessionParser {
     const payload = record.payload ?? {};
 
     if (record.type === "session_meta") {
-      meta.id = payload.id ?? meta.id;
-      meta.cwd = payload.cwd;
-      meta.gitBranch = payload.git?.branch;
+      // Forked rollouts start with their own meta, then replay the parent's. The first one is ours.
+      if (!sawMeta) {
+        sawMeta = true;
+        meta.id = payload.id ?? meta.id;
+        meta.cwd = payload.cwd;
+        meta.gitBranch = payload.git?.branch;
+      }
       return [];
     }
     if (record.type !== "event_msg") return [];

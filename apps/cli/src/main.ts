@@ -9,10 +9,14 @@ import {
   readCodexTitles,
   readSessionMeta,
 } from "@opticon/core";
+import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 
-const HELP = `opticon (protocol v${PROTOCOL_VERSION})
+const HELP = `opticon ${VERSION} (protocol v${PROTOCOL_VERSION})
 
 Usage:
+  opticon web                      Open your sessions in the browser (starts the daemon if needed)
+  opticon daemon                   Run the daemon in the foreground
+  opticon stop                     Stop the background daemon
   opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
   opticon show <id> [--shared]     Print a transcript (--shared: exactly what sharing would upload)
   opticon watch <id>               Print a transcript, then follow it live
@@ -21,6 +25,15 @@ Usage:
 const [command, ...args] = process.argv.slice(2);
 
 switch (command) {
+  case "web":
+    await web();
+    break;
+  case "daemon":
+    await runDaemon(flag("--port") ? Number(flag("--port")) : undefined);
+    break;
+  case "stop":
+    console.log((await stopDaemon()) ? "Daemon stopped." : "Daemon not running.");
+    break;
   case "sessions":
     await sessions(Number(flag("--limit") ?? 20));
     break;
@@ -33,6 +46,14 @@ switch (command) {
   default:
     process.stdout.write(HELP);
     process.exit(command && command !== "help" ? 1 : 0);
+}
+
+async function web() {
+  const { port } = await ensureDaemon();
+  const url = `http://127.0.0.1:${port}/auth?token=${encodeURIComponent(await localToken())}`;
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  const opened = await Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" }).exited.catch(() => 1);
+  console.log(opened === 0 ? `Opened http://127.0.0.1:${port}` : `Open this URL in your browser:\n${url}`);
 }
 
 async function sessions(limit: number) {

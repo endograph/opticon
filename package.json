@@ -2,11 +2,15 @@
   "name": "opticon",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "test": "bun test",
     "typecheck": "bun run --filter '*' typecheck",
-    "opticon": "bun apps/cli/src/main.ts"
+    "opticon": "bun apps/cli/src/main.ts",
+    "dev": "OPTICON_DEV=1 bun --watch apps/cli/src/main.ts daemon"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",

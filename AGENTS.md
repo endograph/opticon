@@ -14,10 +14,19 @@ View your local Claude Code and Codex sessions in a browser, and share chosen se
 
 ```
 packages/core   session discovery, provider parsers, file tailer, redaction, share projection
-apps/cli        `opticon` binary (Bun): daemon, local API, commands
+apps/cli        `opticon` binary (Bun): commands, daemon (session store + local server)
+apps/web        React UI, bundled by Bun's HTML imports and embedded in the binary
 ```
 
-Planned: `apps/web` (Vite + React, runs locally and on opticon.com) and `convex/` (shares, ACLs, presence, CLI auth).
+Planned: `convex/` (shares, ACLs, presence, CLI auth). `apps/web` will also deploy to opticon.com for shared views.
+
+## Daemon
+
+- `apps/cli/src/daemon/store.ts` keeps a metadata index for every session file, persisted to `~/.opticon/index.json` and keyed by file size and mtime. Bump `INDEX_VERSION` whenever parser output changes, or stale cached metadata is served.
+- Full transcripts are only parsed for sessions someone has open. Their tails are dropped a minute after the last viewer leaves.
+- Changes arrive via recursive `fs.watch`, debounced. A 3s poll of open sessions and a 60s rescan cover events FSEvents drops.
+- The local server binds to `127.0.0.1` only. `/api/*` (except `/api/health`) requires the `opticon_local` cookie, which `opticon web` sets through `/auth?token=…` (token in `~/.opticon/local-token`). Requests with a non-loopback `Host` header are rejected to block DNS rebinding.
+- `opticon web` heals the daemon: it starts one if none is healthy, and replaces one running a different version.
 
 ## Session formats
 
@@ -55,6 +64,7 @@ bun install
 bun test               # all tests
 bun run typecheck
 bun opticon sessions   # run the CLI from source
+bun run dev            # daemon from source with web hot reload; then `bun opticon web`
 cd apps/cli && bun link   # global `opticon` pointing at source
 ```
 

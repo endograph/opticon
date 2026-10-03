@@ -117,6 +117,15 @@ describe("codex", () => {
     expect(parser.meta).toMatchObject({ id, cwd: "/repo", title: "add tests" });
   });
 
+  test("forked rollouts keep their own id, not the replayed parent's", () => {
+    const parser = createCodexParser(path);
+    feed(parser, [
+      { type: "session_meta", payload: { id, forked_from_id: "parent", cwd: "/fork" } },
+      { type: "session_meta", payload: { id: "parent", cwd: "/parent" } },
+    ]);
+    expect(parser.meta).toMatchObject({ id, cwd: "/fork" });
+  });
+
   test("index title wins over first message", () => {
     const parser = createCodexParser(path, "Named thread");
     feed(parser, [item({ type: "UserMessage", id: "u1", content: [{ type: "text", text: "hi" }] })]);
