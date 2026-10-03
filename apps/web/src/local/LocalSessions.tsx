@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isPrivate } from "../AccessEditor";
 import { Shell } from "../Shell";
 import { Transcript } from "../Transcript";
 import { formatTime, projectName } from "../format";
@@ -7,6 +8,7 @@ import { type Route, navigate } from "../router";
 import { SessionList } from "./SessionList";
 import { ShareDialog } from "./ShareDialog";
 import { sessionKey, useSession } from "./api";
+import { ProviderIcon } from "../ProviderIcon";
 
 /** This machine's sessions. Only rendered in the local app, which is served by the daemon. */
 export function LocalSessions({ route, selected }: { route: Route; selected?: string }) {
@@ -16,7 +18,8 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   const [sharing, setSharing] = useState(false);
 
   const meta = session.meta ?? sessions.find((s) => sessionKey(s) === selected);
-  const sharedKeys = new Set(shares.map((s) => `${s.provider}/${s.sessionId}`));
+  // Private copies (unshared, or auto synced without sharing) aren't marked as shared.
+  const sharedKeys = new Set(shares.filter((s) => !isPrivate(s.access)).map((s) => `${s.provider}/${s.sessionId}`));
   const share = shares.find((s) => `${s.provider}/${s.sessionId}` === selected);
   useEffect(() => {
     document.title = meta?.title ? `${meta.title} · Opticon` : "Opticon";
@@ -46,7 +49,7 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
             <div className="session-title">
               <h1>{meta?.title ?? "Untitled session"}</h1>
               <div className="session-meta">
-                {meta && <span className={`badge ${meta.provider}`}>{meta.provider}</span>}
+                {meta && <ProviderIcon provider={meta.provider} />}
                 {meta?.cwd && <span title={meta.cwd}>{projectName(meta.cwd)}</span>}
                 {meta?.gitBranch && <span className="mono">{meta.gitBranch}</span>}
                 {meta?.startedAt && <span>{formatTime(meta.startedAt)}</span>}
@@ -54,7 +57,8 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
             </div>
             {share && (
               <a className="share-badge" href={share.url} target="_blank" rel="noreferrer" title={share.url}>
-                Shared{share.viewers > 0 ? ` · ${share.viewers} watching` : ""}
+                {isPrivate(share.access) ? "Synced · private" : "Shared"}
+                {share.viewers > 0 ? ` · ${share.viewers} watching` : ""}
               </a>
             )}
             <button type="button" className="button" disabled={session.status !== "ready"} onClick={() => setSharing(true)}>

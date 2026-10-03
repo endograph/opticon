@@ -22,8 +22,19 @@ export interface MyShare {
   sessionId: string;
   title?: string;
   access: ShareAccess;
+  /** Created by autosync. */
+  auto: boolean;
+  /** Listed on the owner's profile and the public feed. */
+  discoverable: boolean;
   eventCount: number;
   viewers: number;
+}
+
+/** The autosync rule covering a session, and what a new rule would match. */
+export interface AutosyncState {
+  rule: { repo?: string; path?: string } | null;
+  /** A git remote like `github.com/owner/repo`, or a directory. */
+  target: string;
 }
 
 type ListMessage =
@@ -97,10 +108,23 @@ export async function fetchSharePreview(key: string): Promise<SharePreview> {
   return res.json();
 }
 
-export const createShare = (key: string, access: ShareAccess) =>
-  send<{ slug: string; url: string }>("POST", `/api/sessions/${key}/share`, { access });
+/** `discoverable` lists the share on your profile and the public feed; link shares only. */
+export const createShare = (key: string, access: ShareAccess, discoverable: boolean) =>
+  send<{ slug: string; url: string }>("POST", `/api/sessions/${key}/share`, { access, discoverable });
+/** Deletes the server copy. Auto sync won't re-create it. */
 export const deleteShare = (shareId: string) => send("DELETE", `/api/shares/${shareId}`);
-export const setLiveSync = (liveSync: boolean) => send("POST", "/api/settings", { liveSync });
+/** Makes the share private; the copy stays and keeps syncing. */
+export const unshare = (shareId: string) => send("POST", `/api/shares/${shareId}/unshare`);
+
+export async function fetchAutosync(key: string): Promise<AutosyncState> {
+  const res = await fetch(`/api/sessions/${key}/autosync`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
+  return data as AutosyncState;
+}
+/** Syncs every session in this one's project, public and discoverable. */
+export const enableAutosync = (key: string) => send<AutosyncState>("POST", `/api/sessions/${key}/autosync`);
+export const disableAutosync = (key: string) => send<AutosyncState>("DELETE", `/api/sessions/${key}/autosync`);
 
 async function send<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {

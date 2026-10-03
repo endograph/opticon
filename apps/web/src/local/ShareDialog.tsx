@@ -1,7 +1,19 @@
 import type { SessionEvent } from "@opticon/core";
 import { useEffect, useRef, useState } from "react";
-import { type Account, type MyShare, type SharePreview, createShare, deleteShare, fetchSharePreview } from "./api";
-import { useAccessEditor } from "../AccessEditor";
+import {
+  type Account,
+  type AutosyncState,
+  type MyShare,
+  type SharePreview,
+  createShare,
+  deleteShare,
+  disableAutosync,
+  enableAutosync,
+  fetchAutosync,
+  fetchSharePreview,
+  unshare,
+} from "./api";
+import { isPrivate, useAccessEditor } from "../AccessEditor";
 import { Transcript } from "../Transcript";
 
 const RULE_LABELS: Record<string, string> = {
@@ -38,11 +50,17 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [autosync, setAutosync] = useState<AutosyncState>();
   const { access, empty: restrictedToNobody, editor } = useAccessEditor(share?.access);
+  // Off by default: listing publicly is a separate, deliberate choice from sharing a link.
+  const [discoverable, setDiscoverable] = useState(share?.discoverable ?? false);
+  const listed = discoverable && access.anyone;
 
   useEffect(() => {
     dialog.current?.showModal();
     fetchSharePreview(props.sessionKey).then(setPreview, (e: Error) => setError(e.message));
+    // Sessions without a working directory can't be matched to a project; leave the option out.
+    fetchAutosync(props.sessionKey).then(setAutosync, () => {});
   }, [props.sessionKey]);
 
   const run = async (action: () => Promise<unknown>) => {
@@ -61,6 +79,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   const tools = preview?.events.filter((e) => e.kind === "tool").length ?? 0;
   const redacted = preview?.findings.reduce((n, f) => n + f.count, 0) ?? 0;
   const canShare = account?.configured && account.signedIn;
+  const privateShare = share && isPrivate(share.access);
 
   return (
     <dialog ref={dialog} className="share-dialog" onClose={props.onClose}>
@@ -108,6 +127,47 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
         )}
 
         {canShare && editor}
+
+        {canShare && (
+          <div className="discoverable">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={listed}
+                disabled={!access.anyone}
+                onChange={(e) => setDiscoverable(e.target.checked)}
+              />
+              List on my profile and the public feed
+            </label>
+            <span className="hint">
+              {access.anyone ? "Anyone can find it there, not just people with the link." : "Only link shares can be listed."}
+            </span>
+          </div>
+        )}
+
+        {canShare && autosync && (
+          <div className="autosync">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={!!autosync.rule}
+                disabled={busy}
+                onChange={(e) => {
+                  const project = autosync.rule?.repo ?? autosync.rule?.path ?? autosync.target;
+                  if (!e.target.checked) return void run(async () => setAutosync(await disableAutosync(props.sessionKey)));
+                  if (confirm(`This will sync all of your sessions in ${project} and make them publicly discoverable. Continue?`)) {
+                    void run(async () => setAutosync(await enableAutosync(props.sessionKey)));
+                  }
+                }}
+              />
+              Autosync every session in <code>{autosync.rule ? (autosync.rule.repo ?? autosync.rule.path) : autosync.target}</code>
+            </label>
+            <p className="hint">
+              Public and listed on your profile. Sessions active from now on upload about every 30 seconds, redacted but
+              without this preview.
+            </p>
+          </div>
+        )}
       </div>
 
       {error && <p className="notice error">{error}</p>}
@@ -135,33 +195,50 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
               </button>
             </div>
             <span className="spacer" />
+            {!privateShare && (
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                title="Only you can open it. The copy stays on the server and keeps syncing."
+                onClick={() => run(() => unshare(share.shareId).then(() => dialog.current?.close()))}
+              >
+                Unshare
+              </button>
+            )}
             <button
               type="button"
               className="button danger"
               disabled={busy}
               onClick={() => {
-                if (confirm("Stop sharing? The copy on the server is deleted and the link stops working.")) {
+                if (confirm("Delete the copy on the server? The link stops working, and auto sync won't upload this session again.")) {
                   void run(() => deleteShare(share.shareId).then(() => dialog.current?.close()));
                 }
               }}
             >
-              Stop sharing
+              Delete
             </button>
-            <button type="button" className="button primary" disabled={busy || restrictedToNobody} onClick={() => run(() => createShare(props.sessionKey, access))}>
+            <button type="button" className="button primary" disabled={busy || restrictedToNobody} onClick={() => run(() => createShare(props.sessionKey, access, listed))}>
               {busy ? "Saving…" : "Save & resync"}
             </button>
           </>
         ) : (
           <>
             <span className="hint">
-              {account.liveSync ? "Live sync is on: viewers see new messages as they happen." : "Live sync is off: viewers see this snapshot."}
+              {account.liveSync ? (
+                "Live sync is on: viewers see new messages as they happen."
+              ) : (
+                <>
+                  Live sync is off: viewers see this snapshot. Turn it on with <code>opticon live-sync on</code>.
+                </>
+              )}
             </span>
             <span className="spacer" />
             <button
               type="button"
               className="button primary"
               disabled={busy || !preview || restrictedToNobody}
-              onClick={() => run(() => createShare(props.sessionKey, access))}
+              onClick={() => run(() => createShare(props.sessionKey, access, listed))}
             >
               {busy ? "Sharing…" : "Create share link"}
             </button>

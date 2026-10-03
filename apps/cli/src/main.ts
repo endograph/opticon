@@ -13,6 +13,7 @@ import {
 import { api } from "@opticon/server/api";
 import { ConvexHttpClient } from "convex/browser";
 import { clearAuth, endpoints, login, readAuth } from "./account";
+import { addRule, describeRule, newRule, readRules, removeRule } from "./autosync";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 import { DEFAULT_TAILSCALE_PORT, serveOnTailnet, stopServing } from "./tailscale";
 import { update } from "./update";
@@ -27,6 +28,11 @@ Usage:
   opticon login                    Sign in with GitHub to share sessions
   opticon logout                   Sign out on this machine
   opticon whoami                   Show who you're signed in as
+  opticon autosync [dir] [--yes]   Sync this project's sessions (matched by git remote, else by
+                                   directory) and make them publicly discoverable
+  opticon autosync off [dir]       Stop autosyncing this project
+  opticon autosync list            Show autosynced projects
+  opticon live-sync [on|off]       Stream shared sessions while someone is watching (default on)
   opticon daemon                   Run the daemon in the foreground
   opticon stop                     Stop the background daemon
   opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
@@ -62,6 +68,13 @@ switch (command) {
     console.log(me ? `${me.login}${me.liveSync ? "" : " (live sync off)"}` : "Not signed in. Run `opticon login`.");
     break;
   }
+  case "live-sync": {
+    await liveSync(args[0]);
+    break;
+  }
+  case "autosync":
+    await autosync();
+    break;
   case "daemon":
     await runDaemon(flag("--port") ? Number(flag("--port")) : undefined);
     break;
@@ -110,6 +123,69 @@ async function web() {
   }
   if (!args.includes("--no-open") && (await openUrl(url))) console.log(`Opened ${base}`);
   else console.log(`Open this URL in your browser:\n${url}`);
+}
+
+/**
+ * Live sync streams new messages to a shared session while someone is viewing it. It's an
+ * account setting on the server, so it applies to every machine you're signed in on.
+ */
+async function liveSync(value: string | undefined) {
+  const auth = await readAuth();
+  const ep = endpoints();
+  if (!auth || !ep) {
+    console.error("Not signed in. Run `opticon login`.");
+    process.exit(1);
+  }
+  const client = new ConvexHttpClient(ep.convexUrl);
+  if (value === "on" || value === "off") {
+    await client.mutation(api.auth.setLiveSync, { token: auth.token, liveSync: value === "on" });
+  } else if (value !== undefined) {
+    console.error("Usage: opticon live-sync [on|off]");
+    process.exit(1);
+  }
+  const me = await client.query(api.auth.me, { token: auth.token });
+  if (!me) {
+    console.error("Your login expired. Run `opticon login`.");
+    process.exit(1);
+  }
+  console.log(
+    me.liveSync
+      ? "Live sync is on: shared sessions update while someone is watching."
+      : "Live sync is off: viewers see each share as it was when you last shared or resynced it.",
+  );
+}
+
+/** Rules live in ~/.opticon/autosync.json; the daemon watches that file. */
+async function autosync() {
+  const [sub, dir] = args[0] === "off" || args[0] === "list" ? [args[0], args[1]] : [undefined, args[0]];
+  const target = dir && !dir.startsWith("--") ? dir : process.cwd();
+  if (sub === "list") {
+    const rules = await readRules();
+    if (!rules.length) console.log("No autosynced projects. Add one with `opticon autosync [dir]`.");
+    for (const r of rules) console.log(describeRule(r));
+    return;
+  }
+  const rule = await newRule(target);
+  if (sub === "off") {
+    console.log((await removeRule(rule)) ? `Stopped autosyncing ${describeRule(rule)}.` : `${describeRule(rule)} wasn't autosyncing.`);
+    return;
+  }
+  const question = `This will sync all of your sessions in ${describeRule(rule)} and make them publicly discoverable.`;
+  if (!args.includes("--yes")) {
+    if (!process.stdin.isTTY) {
+      console.error(`${question}\nRe-run with --yes to confirm.`);
+      process.exit(1);
+    }
+    const answer = prompt(`${question} Continue? [Y/n]`)?.trim().toLowerCase() ?? "n";
+    if (answer && answer !== "y" && answer !== "yes") return console.log("Cancelled.");
+  }
+  await addRule(rule);
+  const auth = await readAuth();
+  console.log(`Autosyncing ${describeRule(rule)}. Sessions active from now on are uploaded as they change.`);
+  if (auth) console.log(`They'll be listed at ${endpoints()?.webUrl}/u/${auth.login}. Unshare or delete any of them from My shares.`);
+  else console.log("Not signed in yet: run `opticon login`.");
+  // The daemon does the syncing.
+  await ensureDaemon();
 }
 
 async function openUrl(url: string): Promise<boolean> {

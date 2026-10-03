@@ -9,5 +9,7 @@ test("index.html inlines favicon.svg", async () => {
   const html = await Bun.file(join(web, "index.html")).text();
   const href = html.match(/<link rel="icon" type="image\/svg\+xml" href="data:image\/svg\+xml,([^"]+)"/)?.[1];
   expect(href).toBeDefined();
+  // An unescaped "#" starts a URL fragment, which silently truncates the icon.
+  expect(href).not.toContain("#");
   expect(decodeURIComponent(href!)).toBe(svg);
 });

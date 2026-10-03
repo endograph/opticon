@@ -91,13 +91,79 @@ describe("shares", () => {
     ).rejects.toThrow(/protocol_mismatch/);
   });
 
-  test("unsharing deletes the share and its events", async () => {
+  test("deleting purges events and leaves a tombstone that rejects uploads", async () => {
     const { t, owner, shareId, slug } = await setup();
     await t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events: [msg("a", "x")] });
     await t.mutation(api.shares.remove, { token: owner, shareId });
     await t.finishAllScheduledFunctions(() => {});
     expect(await t.query(api.shares.view, { slug })).toEqual({ status: "not_found" });
     expect(await t.run((ctx) => ctx.db.query("shareEvents").collect())).toEqual([]);
+    expect(await t.query(api.shares.mine, { token: owner })).toEqual([]);
+    expect(await t.query(api.shares.deleted, { token: owner })).toEqual([{ provider: "claude", sessionId: "s1" }]);
+    await expect(
+      t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events: [msg("b", "y")] }),
+    ).rejects.toThrow(/deleted/);
+  });
+
+  test("autosync never revives a deleted share, but an explicit share does, with a new link", async () => {
+    const { t, owner, shareId, slug } = await setup();
+    await t.mutation(api.shares.remove, { token: owner, shareId });
+    const create = (auto: boolean) =>
+      t.action(api.shares.create, { token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s1", access: LINK_ACCESS, auto });
+    await expect(create(true)).rejects.toThrow(/deleted/);
+
+    const revived = await create(false);
+    expect(revived.slug).not.toBe(slug);
+    expect(await t.query(api.shares.deleted, { token: owner })).toEqual([]);
+    await t.finishAllScheduledFunctions(() => {});
+    expect(await t.query(api.shares.view, { slug: revived.slug })).toMatchObject({ status: "ok" });
+  });
+
+  test("autosync creates once and leaves an existing share's access alone", async () => {
+    const { t, owner } = await setup(PRIVATE_ACCESS);
+    const created = await t.action(api.shares.create, {
+      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s2", access: PRIVATE_ACCESS, auto: true,
+    });
+    await t.action(api.shares.create, {
+      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s1", access: LINK_ACCESS, auto: true,
+    });
+    const mine = await t.query(api.shares.mine, { token: owner });
+    expect(mine.find((s) => s.sessionId === "s1")).toMatchObject({ access: PRIVATE_ACCESS, auto: false });
+    expect(mine.find((s) => s.slug === created.slug)).toMatchObject({ auto: true });
+  });
+});
+
+describe("discovery", () => {
+  const share = (t: T, token: string, sessionId: string, access = LINK_ACCESS, discoverable = true) =>
+    t.action(api.shares.create, { token, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, title: sessionId, access, discoverable });
+
+  test("discoverable link shares appear on the feed and the owner's profile", async () => {
+    const { t, owner } = await setup();
+    await share(t, owner, "listed");
+    await share(t, owner, "restricted", { anyone: false, users: ["friend"], orgs: [], teams: [] });
+    await share(t, owner, "unlisted", LINK_ACCESS, false);
+    expect((await t.query(api.shares.feed, {})).map((s) => s.title)).toEqual(["listed"]);
+    const profile = await t.query(api.shares.profile, { login: "Owner" });
+    expect(profile?.user.login).toBe("owner");
+    expect(profile?.shares.map((s) => s.title)).toEqual(["listed"]);
+    expect(await t.query(api.shares.profile, { login: "nobody" })).toBeNull();
+  });
+
+  test("narrowing access, unsharing, or deleting unlists; listing needs link access", async () => {
+    const { t, owner } = await setup();
+    const a = await share(t, owner, "a");
+    const b = await share(t, owner, "b");
+    await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: PRIVATE_ACCESS });
+    await t.mutation(api.shares.remove, { token: owner, shareId: b.shareId });
+    expect(await t.query(api.shares.feed, {})).toEqual([]);
+
+    await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: LINK_ACCESS });
+    expect(await t.query(api.shares.feed, {})).toEqual([]);
+    await t.mutation(api.shares.setDiscoverable, { token: owner, shareId: a.shareId, discoverable: true });
+    expect((await t.query(api.shares.feed, {})).map((s) => s.title)).toEqual(["a"]);
+
+    await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: PRIVATE_ACCESS });
+    await expect(t.mutation(api.shares.setDiscoverable, { token: owner, shareId: a.shareId, discoverable: true })).rejects.toThrow(/not_public/);
   });
 });
 

@@ -1,6 +1,6 @@
 import { api } from "@opticon/server/api";
-import { useMutation, useQuery } from "convex/react";
-import { type ReactNode, useEffect, useState } from "react";
+import { useQuery } from "convex/react";
+import type { ReactNode } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { isLocal } from "./config";
 import { SignInButton, useIdentity } from "./identity";
@@ -62,7 +62,7 @@ function PageError() {
 }
 
 /**
- * Cycles system → light → dark. A fixed-size box: the Opticon mark slides aside on hover to
+ * Cycles system → light → dark. A fixed-size box: the ink drop slides aside on hover to
  * uncover the current mode's icon, so the control never changes the space it takes.
  */
 function ThemeButton() {
@@ -81,9 +81,8 @@ function ThemeButton() {
       <svg className="i-dark" viewBox="0 0 16 16" aria-hidden="true">
         <path d="M13.5 9.6A6 6 0 1 1 6.4 2.5a4.8 4.8 0 0 0 7.1 7.1Z" />
       </svg>
-      {/* The favicon's panopticon: a ring of six cells. */}
-      <svg className="i-mark" viewBox="0 0 32 32" aria-hidden="true">
-        <path d="M9.90 2.30A15 15 0 0 1 22.10 2.30L19.99 7.05A9.8 9.8 0 0 0 12.01 7.05ZM24.82 3.86A15 15 0 0 1 30.92 14.43L25.75 14.98A9.8 9.8 0 0 0 21.76 8.07ZM30.92 17.57A15 15 0 0 1 24.82 28.14L21.76 23.93A9.8 9.8 0 0 0 25.75 17.02ZM22.10 29.70A15 15 0 0 1 9.90 29.70L12.01 24.95A9.8 9.8 0 0 0 19.99 24.95ZM7.18 28.14A15 15 0 0 1 1.08 17.57L6.25 17.02A9.8 9.8 0 0 0 10.24 23.93ZM1.08 14.43A15 15 0 0 1 7.18 3.86L10.24 8.07A9.8 9.8 0 0 0 6.25 14.98Z" />
+      <svg className="i-drop" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 1.6c2.7 3 4.4 5.2 4.4 7.1a4.4 4.4 0 0 1-8.8 0c0-1.9 1.7-4.1 4.4-7.1Z" />
       </svg>
     </button>
   );
@@ -92,10 +91,6 @@ function ThemeButton() {
 function AccountFooter() {
   const { token, daemon } = useIdentity();
   const me = useQuery(api.auth.me, token ? { token } : "skip");
-  const setLiveSync = useMutation(api.auth.setLiveSync);
-  // Optimistic: show the new value at once; the server's value wins when it arrives.
-  const [liveSync, setLocalLiveSync] = useState(me?.liveSync ?? true);
-  useEffect(() => setLocalLiveSync(me?.liveSync ?? true), [me?.liveSync]);
 
   if (isLocal() && daemon?.account?.error && !daemon.account.signedIn) {
     return <p className="hint">{daemon.account.error}</p>;
@@ -104,28 +99,19 @@ function AccountFooter() {
   return (
     <div className="account">
       <span className="me truncate">
-        {me.avatarUrl && <img src={me.avatarUrl} alt="" />}
-        <span className="truncate">
-          <strong>{me.login}</strong>
-          {isLocal() && <span className="dim"> · via opticon login</span>}
-        </span>
+        <Link href={`/u/${me.login}`} className="me-link truncate" title="Your public profile">
+          {me.avatarUrl && <img src={me.avatarUrl} alt="" />}
+          <span className="truncate">
+            <strong>{me.login}</strong>
+            {isLocal() && <span className="dim"> · via opticon login</span>}
+          </span>
+        </Link>
         {!isLocal() && (
           <button type="button" className="button subtle small" onClick={signOut}>
             Sign out
           </button>
         )}
       </span>
-      <label className="toggle" title="Stream new messages to shared sessions while someone is viewing">
-        <input
-          type="checkbox"
-          checked={liveSync}
-          onChange={(e) => {
-            setLocalLiveSync(e.target.checked);
-            void setLiveSync({ token, liveSync: e.target.checked });
-          }}
-        />
-        Live sync shared sessions
-      </label>
     </div>
   );
 }

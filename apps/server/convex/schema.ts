@@ -100,10 +100,21 @@ export default defineSchema({
     /** Change counter: bumped on every insert or update, so viewers can follow changes. */
     rev: v.number(),
     updatedAt: v.number(),
+    /** Created by an autosync rule rather than by hand. */
+    auto: v.optional(v.boolean()),
+    /** Listed on the owner's profile and the public feed. Only ever true while `access.anyone`. */
+    discoverable: v.optional(v.boolean()),
+    /**
+     * Set when the owner deletes the share. The row stays as a tombstone (events are purged) so
+     * autosync never re-creates or re-uploads it; only an explicit share replaces it.
+     */
+    deletedAt: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner", ["ownerId"])
-    .index("by_owner_session", ["ownerId", "provider", "sessionId"]),
+    .index("by_owner_session", ["ownerId", "provider", "sessionId"])
+    .index("by_discoverable", ["discoverable", "updatedAt"])
+    .index("by_owner_discoverable", ["ownerId", "discoverable", "updatedAt"]),
 
   shareEvents: defineTable({
     shareId: v.id("shares"),

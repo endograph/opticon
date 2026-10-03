@@ -1,4 +1,4 @@
-import { MAX_SHARED_TEXT, normalizeAccess } from "@opticon/core/protocol";
+import { MAX_SHARED_TEXT, PRIVATE_ACCESS, normalizeAccess } from "@opticon/core/protocol";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -10,12 +10,19 @@ import { accessValidator, sharedEventValidator } from "./schema";
 const MAX_BATCH = 500;
 const CHANGES_PAGE = 500;
 const DELETE_BATCH = 500;
+const FEED_LIMIT = 30;
+const PROFILE_LIMIT = 100;
 
 const provider = v.union(v.literal("claude"), v.literal("codex"));
 
 // --- owner (daemon) ---------------------------------------------------------
 
-/** Creates a share, or updates access on the existing share for this session. */
+/**
+ * Creates a share, or updates access on the existing share for this session. `auto` (autosync)
+ * only ever creates: it leaves an existing share alone and is rejected for deleted ones. An
+ * explicit share of a deleted session replaces the tombstone with a fresh share and link.
+ * `discoverable` lists the share publicly; it only takes effect with link access.
+ */
 export const create = action({
   args: {
     token: v.string(),
@@ -25,6 +32,8 @@ export const create = action({
     title: v.optional(v.string()),
     project: v.optional(v.string()),
     access: accessValidator,
+    auto: v.optional(v.boolean()),
+    discoverable: v.optional(v.boolean()),
   },
   handler: async (ctx, { protocol, ...args }): Promise<{ shareId: Id<"shares">; slug: string }> => {
     requireProtocol(protocol);
@@ -41,6 +50,8 @@ export const upsert = internalMutation({
     title: v.optional(v.string()),
     project: v.optional(v.string()),
     access: accessValidator,
+    auto: v.optional(v.boolean()),
+    discoverable: v.optional(v.boolean()),
     slug: v.string(),
   },
   handler: async (ctx, args) => {
@@ -50,8 +61,15 @@ export const upsert = internalMutation({
       .query("shares")
       .withIndex("by_owner_session", (q) => q.eq("ownerId", user._id).eq("provider", args.provider).eq("sessionId", args.sessionId))
       .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, { access, title: args.title, project: args.project, updatedAt: Date.now() });
+    if (existing?.deletedAt !== undefined) {
+      if (args.auto) throw new ConvexError({ code: "deleted" });
+      // Its events and follows are already being purged by id; the new share starts clean.
+      await ctx.db.delete(existing._id);
+    } else if (existing) {
+      if (!args.auto) {
+        const discoverable = access.anyone && (args.discoverable ?? existing.discoverable ?? false);
+        await ctx.db.patch(existing._id, { access, discoverable, title: args.title, project: args.project, updatedAt: Date.now() });
+      }
       return { shareId: existing._id, slug: existing.slug };
     }
     const shareId = await ctx.db.insert("shares", {
@@ -66,6 +84,8 @@ export const upsert = internalMutation({
       nextSeq: 0,
       rev: 0,
       updatedAt: Date.now(),
+      auto: args.auto,
+      discoverable: access.anyone && !!args.discoverable,
     });
     return { shareId, slug: args.slug };
   },
@@ -114,16 +134,32 @@ export const setAccess = mutation({
   args: { token: v.string(), shareId: v.id("shares"), access: accessValidator },
   handler: async (ctx, { token, shareId, access }) => {
     const share = await ownShare(ctx, token, shareId);
-    await ctx.db.patch(share._id, { access: normalizeAccess(access), updatedAt: Date.now() });
+    const normalized = normalizeAccess(access);
+    // Narrowing access also unlists the share.
+    await ctx.db.patch(share._id, { access: normalized, discoverable: normalized.anyone && !!share.discoverable, updatedAt: Date.now() });
   },
 });
 
-/** Unsharing deletes the server copy. The share disappears immediately; events are purged in batches. */
+/** Lists or unlists a share on the owner's profile and the public feed. Needs link access. */
+export const setDiscoverable = mutation({
+  args: { token: v.string(), shareId: v.id("shares"), discoverable: v.boolean() },
+  handler: async (ctx, { token, shareId, discoverable }) => {
+    const share = await ownShare(ctx, token, shareId);
+    if (discoverable && !share.access.anyone) throw new ConvexError({ code: "not_public" });
+    await ctx.db.patch(share._id, { discoverable });
+  },
+});
+
+/**
+ * Deletes the server copy and remembers that, so autosync leaves the session alone. The share
+ * disappears immediately; events are purged in batches. (Unsharing is `setAccess` to private.)
+ */
 export const remove = mutation({
   args: { token: v.string(), shareId: v.id("shares") },
   handler: async (ctx, { token, shareId }) => {
     const share = await ownShare(ctx, token, shareId);
-    await ctx.db.delete(share._id);
+    const now = Date.now();
+    await ctx.db.patch(share._id, { deletedAt: now, access: PRIVATE_ACCESS, discoverable: false, eventCount: 0, updatedAt: now });
     await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId: share._id });
   },
 });
@@ -155,10 +191,7 @@ export const mine = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     const user = await requireUser(ctx, token);
-    const shares = await ctx.db
-      .query("shares")
-      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
-      .collect();
+    const shares = await ownerShares(ctx, user._id);
     return Promise.all(
       shares.map(async (s) => ({
         shareId: s._id,
@@ -167,6 +200,8 @@ export const mine = query({
         sessionId: s.sessionId,
         title: s.title,
         access: s.access,
+        auto: s.auto ?? false,
+        discoverable: s.discoverable ?? false,
         eventCount: s.eventCount,
         updatedAt: s.updatedAt,
         viewers: await viewerCount(ctx, s._id),
@@ -184,10 +219,7 @@ export const liveDemand = query({
   handler: async (ctx, { token }) => {
     const user = await requireUser(ctx, token);
     if (user.liveSync === false) return [];
-    const shares = await ctx.db
-      .query("shares")
-      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
-      .collect();
+    const shares = await ownerShares(ctx, user._id);
     const demanded = [];
     for (const s of shares) {
       const viewer = await ctx.db
@@ -199,6 +231,69 @@ export const liveDemand = query({
     return demanded;
   },
 });
+
+/** Sessions whose shares the owner deleted. The daemon skips these instead of uploading. */
+export const deleted = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const user = await requireUser(ctx, token);
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      .collect();
+    return shares.filter((s) => s.deletedAt !== undefined).map((s) => ({ provider: s.provider, sessionId: s.sessionId }));
+  },
+});
+
+// --- discovery --------------------------------------------------------------
+
+/** The most recently active discoverable shares, from everyone. */
+export const feed = query({
+  args: {},
+  handler: async (ctx) => {
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_discoverable", (q) => q.eq("discoverable", true))
+      .order("desc")
+      .take(FEED_LIMIT);
+    return Promise.all(shares.map((s) => publicSummary(ctx, s)));
+  },
+});
+
+/** A user's public profile: who they are and their discoverable shares, most recent first. */
+export const profile = query({
+  args: { login: v.string() },
+  handler: async (ctx, { login }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_login", (q) => q.eq("login", login.toLowerCase()))
+      .unique();
+    if (!user) return null;
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_owner_discoverable", (q) => q.eq("ownerId", user._id).eq("discoverable", true))
+      .order("desc")
+      .take(PROFILE_LIMIT);
+    return {
+      user: { login: user.login, name: user.name, avatarUrl: user.avatarUrl },
+      shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))),
+    };
+  },
+});
+
+async function publicSummary(ctx: QueryCtx, share: Doc<"shares">) {
+  const owner = await ctx.db.get(share.ownerId);
+  return {
+    slug: share.slug,
+    title: share.title,
+    project: share.project,
+    provider: share.provider,
+    updatedAt: share.updatedAt,
+    eventCount: share.eventCount,
+    viewers: await viewerCount(ctx, share._id),
+    owner: owner && { login: owner.login, avatarUrl: owner.avatarUrl },
+  };
+}
 
 // --- viewers ----------------------------------------------------------------
 
@@ -264,14 +359,25 @@ async function ownShare(ctx: QueryCtx, token: string, shareId: Id<"shares">): Pr
   const user = await requireUser(ctx, token);
   const share = await ctx.db.get(shareId);
   if (!share || share.ownerId !== user._id) throw new ConvexError({ code: "not_found" });
+  if (share.deletedAt !== undefined) throw new ConvexError({ code: "deleted" });
   return share;
 }
 
+async function ownerShares(ctx: QueryCtx, ownerId: Id<"users">): Promise<Doc<"shares">[]> {
+  const shares = await ctx.db
+    .query("shares")
+    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+    .collect();
+  return shares.filter((s) => s.deletedAt === undefined);
+}
+
+/** Live shares only: a deleted share's link behaves as if it never existed. */
 export async function shareBySlug(ctx: QueryCtx, slug: string): Promise<Doc<"shares"> | null> {
-  return ctx.db
+  const share = await ctx.db
     .query("shares")
     .withIndex("by_slug", (q) => q.eq("slug", slug))
     .unique();
+  return share?.deletedAt === undefined ? share : null;
 }
 
 export async function viewerCount(ctx: QueryCtx, shareId: Id<"shares">): Promise<number> {

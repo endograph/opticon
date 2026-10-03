@@ -1,15 +1,26 @@
 import { type FSWatcher, watch } from "node:fs";
 import { basename } from "node:path";
-import { PROTOCOL_VERSION, type ShareAccess, type SharedEvent, type SharedSessionProjection, projectSessionForShare } from "@opticon/core";
+import {
+  PRIVATE_ACCESS,
+  PROTOCOL_VERSION,
+  type SessionMeta,
+  type ShareAccess,
+  type SharedEvent,
+  type SharedSessionProjection,
+  projectSessionForShare,
+} from "@opticon/core";
 import { api } from "@opticon/server/api";
 import { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
 import { AUTH_FILE, type Auth, endpoints, readAuth } from "../account";
+import { AUTOSYNC_FILE, type AutosyncRule, matches, readRules, repoOf } from "../autosync";
 import { OPTICON_HOME } from "../paths";
-import { type SessionKey, type SessionMessage, type SessionStore, keyOf } from "./store";
+import { type ListChange, type SessionKey, type SessionMessage, type SessionStore, keyOf } from "./store";
 
 const MAX_BATCH_EVENTS = 200;
 const MAX_BATCH_BYTES = 2_000_000;
+/** Autosync uploads an active session at most this often. Live viewers still get live updates. */
+const AUTOSYNC_INTERVAL_MS = 30_000;
 
 export type MyShare = FunctionReturnType<typeof api.shares.mine>[number];
 type Demand = FunctionReturnType<typeof api.shares.liveDemand>;
@@ -28,6 +39,10 @@ export interface AccountState {
  * Bridges local sessions and the sharing backend. Shares are uploaded in full when created.
  * After that, a session is streamed only while the server reports live demand (a connected
  * viewer, with live sync on). Uploads are diffed against what this daemon already sent.
+ *
+ * Autosync rules additionally create and refresh shares, on a slow cadence, for every session
+ * in a matching project that's active after the rule was added. Sessions whose share the owner
+ * deleted are skipped; the server also rejects them.
  */
 export class ShareSync {
   private client?: ConvexClient;
@@ -39,21 +54,35 @@ export class ShareSync {
   private queues = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
   private authWatcher?: FSWatcher;
+  private offList?: () => void;
+  /** Sessions whose share was deleted, from the server. */
+  private deleted = new Set<SessionKey>();
+  private autoTimers = new Map<SessionKey, Timer>();
+  private autoQueue: Promise<void> = Promise.resolve();
+  private repos = new Map<string, Promise<string | undefined>>();
+  rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
   account: AccountState = { configured: !!endpoints(), signedIn: false, liveSync: true, webUrl: endpoints()?.webUrl };
 
   constructor(private readonly store: SessionStore) {}
 
   async start(): Promise<void> {
+    this.rules = await readRules();
     await this.connect();
     // `opticon login` / `logout` rewrite auth.json; reconnect when that happens.
+    // `opticon autosync` edits autosync.json; pick up the new rules.
     this.authWatcher = watch(OPTICON_HOME, (_event, name) => {
       if (name === basename(AUTH_FILE)) void this.connect();
+      if (name === basename(AUTOSYNC_FILE)) void this.reloadRules();
     });
+    this.offList = this.store.onList((change) => this.onSessions(change));
   }
 
   stop(): void {
     this.authWatcher?.close();
+    this.offList?.();
+    for (const timer of this.autoTimers.values()) clearTimeout(timer);
+    this.autoTimers.clear();
     this.disconnect();
   }
 
@@ -70,8 +99,13 @@ export class ShareSync {
     return `${this.account.webUrl}/s/${slug}`;
   }
 
-  /** Creates or updates a share and uploads the whole session. */
-  async share(key: SessionKey, access: ShareAccess): Promise<{ slug: string; url: string }> {
+  /** Creates or updates a share and uploads the whole session. `auto` only creates; see shares.create. */
+  async share(
+    key: SessionKey,
+    access: ShareAccess,
+    options: { auto?: boolean; discoverable?: boolean } = {},
+  ): Promise<{ slug: string; url: string }> {
+    const { auto = false, discoverable } = options;
     const { client, auth } = this.requireClient();
     const session = await this.store.events(key);
     if (!session) throw new Error("Session not found");
@@ -85,22 +119,30 @@ export class ShareSync {
       title: projection.meta.title,
       project: projection.meta.project,
       access,
+      auto,
+      discoverable,
     });
+    if (!auto) this.deleted.delete(key);
     await this.upload(shareId, projection);
     return { slug, url: this.urlFor(slug) };
   }
 
+  /** Makes a share private. The copy stays on the server and keeps syncing. */
   async unshare(shareId: string): Promise<void> {
     const { client, auth } = this.requireClient();
+    await client.mutation(api.shares.setAccess, { token: auth.token, shareId: shareId as never, access: PRIVATE_ACCESS });
+  }
+
+  /** Deletes the server copy. Autosync won't re-create it; only an explicit share does. */
+  async delete(shareId: string): Promise<void> {
+    const { client, auth } = this.requireClient();
+    const share = this.shares.find((s) => s.shareId === shareId);
+    if (share) this.deleted.add(keyOf({ provider: share.provider, id: share.sessionId }));
     this.stopLive(shareId);
     this.uploaded.delete(shareId);
     await client.mutation(api.shares.remove, { token: auth.token, shareId: shareId as never });
   }
 
-  async setLiveSync(liveSync: boolean): Promise<void> {
-    const { client, auth } = this.requireClient();
-    await client.mutation(api.auth.setLiveSync, { token: auth.token, liveSync });
-  }
 
   // --- connection -----------------------------------------------------------
 
@@ -134,7 +176,18 @@ export class ShareSync {
         { token },
         (shares) => {
           this.shares = shares;
+          // A share deleted elsewhere (e.g. on opticon.tv) lost its events; forget what we sent.
+          const live = new Set(shares.map((s) => s.shareId as string));
+          for (const shareId of this.uploaded.keys()) if (!live.has(shareId)) this.uploaded.delete(shareId);
           this.emit();
+        },
+        onError,
+      ),
+      client.onUpdate(
+        api.shares.deleted,
+        { token },
+        (deleted) => {
+          this.deleted = new Set(deleted.map((d) => keyOf({ provider: d.provider, id: d.sessionId })));
         },
         onError,
       ),
@@ -149,11 +202,75 @@ export class ShareSync {
     void this.client?.close();
     this.client = undefined;
     this.shares = [];
+    this.deleted.clear();
   }
 
   private requireClient(): { client: ConvexClient; auth: Auth } {
     if (!this.client || !this.auth || !this.account.signedIn) throw new Error("Not signed in. Run `opticon login`.");
     return { client: this.client, auth: this.auth };
+  }
+
+  // --- autosync -------------------------------------------------------------
+
+  async reloadRules(): Promise<void> {
+    this.rules = await readRules();
+    this.emit();
+  }
+
+  /** The rule covering `cwd`, if any. Remotes are looked up once per directory. */
+  async ruleFor(cwd: string): Promise<AutosyncRule | undefined> {
+    if (!this.rules.length) return undefined;
+    let repo: Promise<string | undefined> | undefined;
+    if (this.rules.some((r) => r.repo)) {
+      repo = this.repos.get(cwd) ?? repoOf(cwd);
+      this.repos.set(cwd, repo);
+    }
+    const remote = await repo;
+    return this.rules.find((r) => matches(r, cwd, remote));
+  }
+
+  /**
+   * Session files changed. Throttled rather than debounced, so a long-running turn still syncs
+   * every AUTOSYNC_INTERVAL_MS; uploads run one at a time.
+   */
+  private onSessions(change: ListChange): void {
+    if (!this.rules.length) return;
+    for (const meta of change.upserted) {
+      const key = keyOf(meta);
+      if (this.autoTimers.has(key)) continue;
+      void this.autoRule(meta).then((rule) => {
+        if (!rule || this.autoTimers.has(key)) return;
+        const timer = setTimeout(() => {
+          this.autoTimers.delete(key);
+          this.autoQueue = this.autoQueue.then(() => this.autosync(key)).catch((error: Error) => {
+            console.error(`Autosync failed (${key}): ${error.message}`);
+          });
+        }, AUTOSYNC_INTERVAL_MS);
+        this.autoTimers.set(key, timer);
+      });
+    }
+  }
+
+  private async autoRule(meta: SessionMeta): Promise<AutosyncRule | undefined> {
+    if (!meta.cwd || this.deleted.has(keyOf(meta))) return undefined;
+    const rule = await this.ruleFor(meta.cwd);
+    // No backfill: only sessions active since the rule was added.
+    if (!rule || (meta.updatedAt ?? "") < rule.since) return undefined;
+    return rule;
+  }
+
+  private async autosync(key: SessionKey): Promise<void> {
+    const meta = this.store.get(key);
+    if (!meta || !this.account.signedIn || this.deleted.has(key)) return;
+    const rule = await this.autoRule(meta);
+    if (!rule) return;
+    const existing = this.shareFor(key);
+    if (!existing) {
+      await this.share(key, rule.share ?? PRIVATE_ACCESS, { auto: true, discoverable: rule.discoverable });
+      return;
+    }
+    const session = await this.store.events(key);
+    if (session) await this.upload(existing.shareId, projectSessionForShare(session));
   }
 
   // --- live sync ------------------------------------------------------------

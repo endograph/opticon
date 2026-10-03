@@ -2,6 +2,7 @@ import type { Provider, SessionMeta } from "@opticon/core";
 import { useMemo, useState } from "react";
 import { dayLabel, isLive, projectName, relativeTime, useNow } from "../format";
 import { sessionKey } from "./api";
+import { ProviderIcon } from "../ProviderIcon";
 
 const PAGE = 200;
 
@@ -46,7 +47,7 @@ export function SessionList(props: {
         <div className="segmented" role="tablist">
           {(["all", "claude", "codex"] as const).map((p) => (
             <button key={p} type="button" role="tab" aria-selected={provider === p} onClick={() => setProvider(p)}>
-              {p === "all" ? "All" : p === "claude" ? "Claude" : "Codex"}
+              {p === "all" ? "All" : <ProviderIcon provider={p} />}
             </button>
           ))}
         </div>
@@ -72,7 +73,7 @@ export function SessionList(props: {
                     <span className="truncate">{s.title ?? "Untitled session"}</span>
                   </span>
                   <span className="session-item-meta">
-                    <span className={`provider-mark ${s.provider}`}>{s.provider === "claude" ? "Claude" : "Codex"}</span>
+                    <ProviderIcon provider={s.provider} size={12} />
                     {s.cwd && <span className="truncate">{projectName(s.cwd)}</span>}
                     <span className="spacer" />
                     {props.shared.has(key) && <span className="shared-mark">Shared</span>}

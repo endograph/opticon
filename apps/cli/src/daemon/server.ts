@@ -2,6 +2,7 @@ import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectSessionForS
 import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
 import { endpoints, readAuth } from "../account";
+import { addRule, describeRule, newRule, removeRule } from "../autosync";
 import { type SessionKey, SessionStore } from "./store";
 import { tailnetHostname } from "../tailscale";
 import { ShareSync } from "./sync";
@@ -88,9 +89,10 @@ export async function startServer(options: DaemonOptions) {
         const url = new URL(req.url);
         if (url.searchParams.get("token") !== options.token) return new Response("Invalid token", { status: 401 });
         req.cookies.set(COOKIE, options.token, { httpOnly: true, sameSite: "strict", path: "/", maxAge: 60 * 60 * 24 * 365 });
-        const next = url.searchParams.get("next") ?? "/";
+        // `opticon web` opens on your sessions; the home page stays reachable at /.
+        const next = url.searchParams.get("next") ?? "/local";
         // "//host" is protocol-relative, i.e. an external redirect.
-        return Response.redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/", 302);
+        return Response.redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/local", 302);
       },
 
       "/api/sessions": guard(() => Response.json(store.list())),
@@ -129,19 +131,41 @@ export async function startServer(options: DaemonOptions) {
 
       "/api/sessions/:provider/:id/share": guard(async (req) => {
         if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
-        const { access } = (await req.json()) as { access: ShareAccess };
-        return sync.share(sessionKey(req), normalizeAccess(access)).then((r) => Response.json(r), failure);
+        const { access, discoverable } = (await req.json()) as { access: ShareAccess; discoverable?: boolean };
+        // The dialog's checkbox is the source of truth, so an explicit false unlists an existing share.
+        return sync
+          .share(sessionKey(req), normalizeAccess(access), { discoverable: !!discoverable && access.anyone })
+          .then((r) => Response.json(r), failure);
       }),
 
+      /** DELETE deletes the server copy; autosync won't bring it back. */
       "/api/shares/:shareId": guard(async (req) => {
         if (req.method !== "DELETE") return new Response("Method not allowed", { status: 405 });
+        return sync.delete(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
+      }),
+
+      /** Makes the share private; the copy stays and keeps syncing. */
+      "/api/shares/:shareId/unshare": guard(async (req) => {
+        if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
         return sync.unshare(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
       }),
 
-      "/api/settings": guard(async (req) => {
-        if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
-        const { liveSync } = (await req.json()) as { liveSync: boolean };
-        return sync.setLiveSync(liveSync).then(() => Response.json({ ok: true }), failure);
+      /**
+       * Autosync for this session's project. GET reports the rule covering it, if any, and what a
+       * new rule would match; POST adds a public, discoverable one; DELETE removes it.
+       */
+      "/api/sessions/:provider/:id/autosync": guard(async (req) => {
+        const cwd = store.get(sessionKey(req))?.cwd;
+        if (!cwd) return Response.json({ error: "This session has no working directory" }, { status: 404 });
+        if (req.method === "POST") {
+          await addRule(await newRule(cwd));
+        } else if (req.method === "DELETE") {
+          const rule = await sync.ruleFor(cwd);
+          if (rule) await removeRule(rule);
+        }
+        if (req.method !== "GET") await sync.reloadRules();
+        const [rule, target] = await Promise.all([sync.ruleFor(cwd), newRule(cwd)]);
+        return Response.json({ rule: rule ?? null, target: describeRule(target) });
       }),
 
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {

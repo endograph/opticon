@@ -50,7 +50,7 @@ function LocalIdentity({ children }: { children: ReactNode }) {
   return <IdentityContext.Provider value={{ token, daemon }}>{children}</IdentityContext.Provider>;
 }
 
-export function SignInButton({ primary }: { primary?: boolean }) {
+export function SignInButton({ primary, large }: { primary?: boolean; large?: boolean }) {
   if (isLocal()) {
     return (
       <span className="hint">
@@ -61,7 +61,7 @@ export function SignInButton({ primary }: { primary?: boolean }) {
   return (
     <button
       type="button"
-      className={`button ${primary ? "primary" : ""}`}
+      className={`button${primary ? " primary" : ""}${large ? " large" : ""}`}
       onClick={() => signIn(config.devAuth ? (prompt("Dev sign-in as which GitHub user?", "dev") ?? undefined) : undefined)}
     >
       Sign in with GitHub

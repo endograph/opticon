@@ -7,6 +7,8 @@ export type Route =
   | { name: "share"; slug: string }
   | { name: "shares" }
   | { name: "following" }
+  /** A user's public profile. */
+  | { name: "user"; login: string }
   | { name: "cli"; code: string }
   | { name: "not_found" };
 
@@ -19,6 +21,8 @@ export function parseRoute(path: string, search: string): Route {
   if (share?.[1]) return { name: "share", slug: share[1] };
   if (path === "/shares") return { name: "shares" };
   if (path === "/following") return { name: "following" };
+  const user = path.match(/^\/u\/([\w-]+)$/);
+  if (user?.[1]) return { name: "user", login: user[1] };
   if (path === "/cli") return { name: "cli", code: new URLSearchParams(search).get("code") ?? "" };
   return { name: "not_found" };
 }

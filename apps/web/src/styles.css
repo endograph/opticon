@@ -1,15 +1,15 @@
 :root {
   color-scheme: light dark;
-  --bg: #fbfbfa;
-  --panel: #f3f3f1;
+  --bg: #ffffff;
+  --panel: #fafafa;
   --raised: #ffffff;
-  --border: #e4e4e0;
-  --text: #1d1d1b;
-  --dim: #6f6f69;
-  --faint: #9c9c95;
-  --accent: #3d5afe;
-  --accent-soft: #e8ecff;
-  --user-bg: #efefec;
+  --border: #ececee;
+  --text: #0a0a0b;
+  --dim: #62626a;
+  --faint: #a0a0a8;
+  --accent: #2f5bea;
+  --accent-soft: #eef2fe;
+  --user-bg: #f4f4f5;
   --ok: #2e7d4f;
   --error: #c62828;
   --warn-bg: #fff6e0;
@@ -17,7 +17,7 @@
   --claude: #c96442;
   --codex: #3a3a3a;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --radius: 8px;
+  --radius: 6px;
 }
 
 /* Dark applies when chosen explicitly, or by the OS when no theme is chosen (no data-theme
@@ -28,16 +28,16 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #161615;
-  --panel: #1d1d1c;
-  --raised: #242423;
-  --border: #2f2f2d;
-  --text: #e9e9e6;
-  --dim: #a2a29b;
-  --faint: #75756f;
-  --accent: #8c9eff;
-  --accent-soft: #262c48;
-  --user-bg: #262625;
+  --bg: #0a0a0b;
+  --panel: #111113;
+  --raised: #111113;
+  --border: #1f1f23;
+  --text: #fafafa;
+  --dim: #a1a1aa;
+  --faint: #63636b;
+  --accent: #7c9cff;
+  --accent-soft: #161c33;
+  --user-bg: #18181b;
   --ok: #6fcf97;
   --error: #ff7b7b;
   --warn-bg: #2d2615;
@@ -48,16 +48,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #161615;
-    --panel: #1d1d1c;
-    --raised: #242423;
-    --border: #2f2f2d;
-    --text: #e9e9e6;
-    --dim: #a2a29b;
-    --faint: #75756f;
-    --accent: #8c9eff;
-    --accent-soft: #262c48;
-    --user-bg: #262625;
+    --bg: #0a0a0b;
+    --panel: #111113;
+    --raised: #111113;
+    --border: #1f1f23;
+    --text: #fafafa;
+    --dim: #a1a1aa;
+    --faint: #63636b;
+    --accent: #7c9cff;
+    --accent-soft: #161c33;
+    --user-bg: #18181b;
     --ok: #6fcf97;
     --error: #ff7b7b;
     --warn-bg: #2d2615;
@@ -81,8 +81,9 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13.5px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.003em;
 }
 
 button {
@@ -122,7 +123,7 @@ pre,
 
 .app {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 252px minmax(0, 1fr);
   /* One viewport-high row: the sidebar list and the transcript scroll, never the page. */
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
@@ -163,7 +164,7 @@ pre,
 .sidebar {
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   min-height: 0;
 }
@@ -177,13 +178,14 @@ pre,
 
 .search {
   width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
+  padding: 6px 9px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--raised);
+  background: var(--user-bg);
   color: var(--text);
   font: inherit;
   outline: none;
+  font-size: 13px;
 }
 
 .search:focus {
@@ -193,7 +195,7 @@ pre,
 .segmented {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  background: var(--border);
+  background: var(--user-bg);
   border-radius: var(--radius);
   padding: 2px;
   gap: 2px;
@@ -222,12 +224,12 @@ pre,
 }
 
 .group-label {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--faint);
-  margin: 14px 8px 4px;
+  margin: 12px 8px 2px;
 }
 
 .session-item {
@@ -237,17 +239,17 @@ pre,
   text-align: left;
   border: 0;
   background: transparent;
-  padding: 7px 8px;
-  border-radius: var(--radius);
+  padding: 6px 8px;
+  border-radius: 5px;
   cursor: pointer;
 }
 
 .session-item:hover {
-  background: var(--border);
+  background: var(--user-bg);
 }
 
 .session-item[aria-current="true"] {
-  background: var(--accent-soft);
+  background: var(--user-bg);
 }
 
 .session-item-title {
@@ -255,13 +257,13 @@ pre,
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .session-item-meta {
   display: flex;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--faint);
   min-width: 0;
 }
@@ -270,13 +272,7 @@ pre,
   flex: 1;
 }
 
-.provider-mark.claude {
-  color: var(--claude);
-}
 
-.provider-mark.codex {
-  color: var(--codex);
-}
 
 .live-dot {
   flex: none;
@@ -293,7 +289,7 @@ pre,
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 14px 32px;
+  padding: 11px 28px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -303,12 +299,13 @@ pre,
 }
 
 .session-title h1 {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
   margin: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  letter-spacing: -0.015em;
 }
 
 .session-meta {
@@ -320,28 +317,18 @@ pre,
   margin-top: 2px;
 }
 
-.badge {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 
-.badge.claude {
-  color: var(--claude);
-}
 
-.badge.codex {
-  color: var(--codex);
-}
 
 .button {
   border: 1px solid var(--border);
   background: var(--raised);
-  padding: 6px 14px;
+  padding: 5px 12px;
   border-radius: var(--radius);
   cursor: pointer;
   white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .button:hover:not(:disabled) {
@@ -353,10 +340,12 @@ pre,
   cursor: default;
 }
 
+/* Primary actions are the text color, inverted: black on white, white on black. Blue is kept
+   for links and live state. */
 .button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
 }
 
 .button.subtle {
@@ -395,8 +384,8 @@ pre,
 
 .message.user .message-body {
   background: var(--user-bg);
-  padding: 10px 14px;
-  border-radius: 14px;
+  padding: 8px 12px;
+  border-radius: 10px;
   max-width: 85%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -678,12 +667,6 @@ div.step {
   color: var(--dim);
 }
 
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
 
 .shared-mark,
 .unread-mark {
@@ -726,6 +709,23 @@ a.session-item {
   padding: 12px 20px 0;
   display: grid;
   gap: 6px;
+}
+
+.autosync {
+  padding: 10px 20px 0;
+  display: grid;
+  gap: 2px;
+}
+
+.autosync label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.autosync .hint {
+  margin: 0 0 0 24px;
 }
 
 .radio {
@@ -786,8 +786,8 @@ a.session-item {
 
 .sidebar-nav {
   display: grid;
-  gap: 2px;
-  padding: 12px 8px 8px;
+  gap: 0;
+  padding: 10px 8px 6px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -799,7 +799,7 @@ a.session-item {
 }
 
 /* Every icon is stacked at the left of a fixed-size box, so nothing here can reflow the nav:
-   the mark simply slides off the theme icon on hover. */
+   the drop simply slides off the theme icon on hover. */
 .theme {
   position: relative;
   width: 37px;
@@ -830,23 +830,23 @@ a.session-item {
   stroke-linejoin: round;
 }
 
-/* Smaller than the theme icons, so it centres itself vertically. */
-.theme .i-mark {
-  width: 14px;
-  height: 14px;
-  top: 1px;
+/* Smaller than the theme icons, so it centres itself vertically: the drop is drawn from
+   y=1.6 to y=13.4 of a 16 box, not edge to edge. */
+.theme .i-drop {
+  width: 13px;
+  height: 13px;
+  top: 2px;
   right: 1px;
-  fill: currentColor;
-  stroke: none;
+  stroke-width: 1.7;
   transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.theme:hover .i-mark,
-.theme:focus-visible .i-mark {
+.theme:hover .i-drop,
+.theme:focus-visible .i-drop {
   transform: translateX(-22px);
 }
 
-/* The theme icons only exist to be uncovered: hidden until the mark moves. */
+/* The theme icons only exist to be uncovered: hidden until the drop moves. */
 .theme .i-system,
 .theme .i-light,
 .theme .i-dark {
@@ -867,28 +867,31 @@ a.session-item {
 }
 
 .brand {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text);
   text-decoration: none;
   padding: 2px 8px 8px;
+  font-size: 14px;
+  letter-spacing: -0.02em;
 }
 
 .nav-item {
   color: var(--dim);
   text-decoration: none;
-  padding: 5px 8px;
-  border-radius: var(--radius);
-  font-size: 13.5px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 13px;
 }
 
 .nav-item:hover {
-  background: var(--border);
+  background: var(--user-bg);
   color: var(--text);
 }
 
 .nav-item[aria-current="true"] {
-  background: var(--accent-soft);
+  background: var(--user-bg);
   color: var(--text);
+  font-weight: 500;
 }
 
 .sidebar-content {
@@ -991,6 +994,47 @@ a.session-item {
   margin: 0;
 }
 
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-header img {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+}
+
+.profile-header h1 {
+  margin: 0;
+}
+
+a.owner,
+.me-link {
+  color: inherit;
+}
+
+a.owner:hover {
+  text-decoration: underline;
+}
+
+.me-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.me-link img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: none;
+}
+
 .actions {
   margin-top: 20px;
   display: flex;
@@ -1068,4 +1112,342 @@ a.session-item {
 
 .share-row-editor .share-access {
   padding: 0;
+}
+
+/* Home (opticon.tv) */
+
+/* Vertically centred. Auto margins rather than justify-content, which would clip the top
+   when the content is taller than the window. */
+.page.home {
+  display: flex;
+  flex-direction: column;
+  padding: 40px 32px;
+}
+
+.home > :first-child {
+  margin-top: auto;
+}
+
+.home > :last-child {
+  margin-bottom: auto;
+}
+
+.home > section,
+.home > footer {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.hero {
+  padding: 72px 0 36px;
+  text-align: center;
+}
+
+.hero-mark {
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+.page.home .hero h1 {
+  font-size: 36px;
+  letter-spacing: -0.04em;
+  margin: 0;
+  font-weight: 750;
+}
+
+.lede {
+  font-size: 16px;
+  color: var(--dim);
+  margin: 6px 0 0;
+}
+
+.hero-sub {
+  color: var(--dim);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.hero-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 26px;
+  flex-wrap: wrap;
+}
+
+.button.large {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13.5px;
+  text-decoration: none;
+}
+
+.page.home a.button {
+  color: var(--text);
+}
+
+.page.home a.button.primary {
+  color: var(--bg);
+}
+
+.page.home a.button.primary:hover {
+  filter: brightness(1.08);
+}
+
+.install {
+  padding: 8px 0 28px;
+}
+
+.feed {
+  padding: 8px 0 28px;
+}
+
+.page.home .feed h2,
+.page.home .install h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  margin: 0 0 10px;
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 6px 6px 12px;
+  margin: 8px 0;
+}
+
+.command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.command .prompt {
+  color: var(--faint);
+  user-select: none;
+}
+
+.command .button.small {
+  margin-left: 0;
+  flex: none;
+}
+
+.install > p {
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+
+.home-footer {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.page.home .home-footer a {
+  color: var(--dim);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page.home .home-footer a:hover {
+  color: var(--text);
+}
+
+.steps .command {
+  margin-top: 6px;
+}
+
+
+.hero-note {
+  margin: 14px 0 0;
+}
+
+.install-dialog {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.25);
+}
+
+.install-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.install-dialog::backdrop {
+  background: rgb(0 0 0 / 0.35);
+}
+
+.install-dialog header,
+.install-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+}
+
+.install-dialog header {
+  border-bottom: 1px solid var(--border);
+}
+
+.install-dialog footer {
+  border-top: 1px solid var(--border);
+}
+
+.install-dialog footer a.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: var(--dim);
+}
+
+.install-dialog h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.install-body {
+  overflow-y: auto;
+  padding: 16px 20px 6px;
+}
+
+.install-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.install-steps .dim {
+  font-size: 12.5px;
+}
+
+.install-body h3 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  margin: 22px 0 8px;
+}
+
+.how {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 13.5px;
+}
+
+/* Provider marks, as in T3 Code: Claude's starburst in its orange, OpenAI's knot for Codex in the text color. */
+.provider-icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: -2px;
+}
+
+.provider-icon.claude {
+  fill: #d97757;
+}
+
+.provider-icon.codex {
+  fill: var(--text);
+}
+
+.session-meta,
+.session-item-meta {
+  align-items: center;
+}
+
+.segmented button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Overlay scrollbars: native ones are hidden everywhere and ScrollThumbs draws a thin thumb over
+   the content while scrolling or when the pointer nears the edge. Scrolling itself is unchanged. */
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
+.scroll-thumb {
+  position: fixed;
+  z-index: 1000;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+  animation: scroll-thumb-in 0.12s ease-out;
+  cursor: default;
+}
+
+.scroll-thumb.y {
+  width: 6px;
+}
+
+.scroll-thumb.x {
+  height: 6px;
+}
+
+.scroll-thumb:hover,
+.scroll-thumb:active {
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+@keyframes scroll-thumb-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.discoverable {
+  display: grid;
+  gap: 2px;
+  padding: 10px 20px 0;
+}
+
+.discoverable .hint {
+  margin: 0 0 0 22px;
+  font-size: 12px;
+}
+
+.discoverable .toggle:has(input:disabled) {
+  color: var(--faint);
+  cursor: default;
 }

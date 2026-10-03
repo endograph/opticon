@@ -1,12 +1,14 @@
+import { PRIVATE_ACCESS } from "@opticon/core/protocol";
 import { api } from "@opticon/server/api";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
-import { describeAccess, useAccessEditor } from "../AccessEditor";
+import { describeAccess, isPrivate, useAccessEditor } from "../AccessEditor";
 import { config, isLocal } from "../config";
 import { relativeTime } from "../format";
 import { SignInButton, useToken } from "../identity";
 import { Link } from "../router";
+import { ProviderIcon } from "../ProviderIcon";
 
 type Share = FunctionReturnType<typeof api.shares.mine>[number];
 
@@ -35,7 +37,8 @@ export function MyShares() {
       <header className="page-header">
         <h1>My shares</h1>
         <p className="dim">
-          Shares are copies on the server. Stopping a share deletes its copy.{" "}
+          Shares are copies on the server. Unsharing makes a copy private; deleting removes it, and auto sync won't
+          upload that session again.{" "}
           {isLocal() ? (
             "To share another session, open it under Local sessions."
           ) : (
@@ -60,6 +63,9 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
   const remove = useMutation(api.shares.remove);
+  const setAccess = useMutation(api.shares.setAccess);
+  const setDiscoverable = useMutation(api.shares.setDiscoverable);
+  const privateShare = isPrivate(share.access);
   const url = `${config.webUrl}/s/${share.slug}`;
 
   return (
@@ -69,8 +75,10 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
           {share.title ?? "Untitled session"}
         </Link>
         <div className="session-meta">
-          <span className={`badge ${share.provider}`}>{share.provider}</span>
+          <ProviderIcon provider={share.provider} />
           <span>{describeAccess(share.access)}</span>
+          {share.discoverable && <span title="On your profile and the public feed">listed</span>}
+          {share.auto && <span title="Created by autosync">auto</span>}
           <span>{share.eventCount} events</span>
           <span>updated {relativeTime(new Date(share.updatedAt).toISOString())}</span>
           {share.viewers > 0 && (
@@ -100,16 +108,36 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
         <button type="button" className="button" onClick={() => setEditing(!editing)} aria-expanded={editing}>
           Access…
         </button>
+        {share.access.anyone && (
+          <button
+            type="button"
+            className="button"
+            title={share.discoverable ? "Remove from your profile and the public feed" : "Show on your profile and the public feed"}
+            onClick={() => void setDiscoverable({ token, shareId: share.shareId, discoverable: !share.discoverable })}
+          >
+            {share.discoverable ? "Unlist" : "List publicly"}
+          </button>
+        )}
+        {!privateShare && (
+          <button
+            type="button"
+            className="button"
+            title="Only you can open it. The copy stays and keeps syncing."
+            onClick={() => void setAccess({ token, shareId: share.shareId, access: PRIVATE_ACCESS })}
+          >
+            Unshare
+          </button>
+        )}
         <button
           type="button"
           className="button danger"
           onClick={() => {
-            if (confirm(`Stop sharing "${share.title ?? "this session"}"? The copy on the server is deleted and the link stops working.`)) {
+            if (confirm(`Delete "${share.title ?? "this session"}" from the server? The link stops working, and auto sync won't upload it again.`)) {
               void remove({ token, shareId: share.shareId });
             }
           }}
         >
-          Stop sharing
+          Delete
         </button>
       </div>
       {editing && <AccessForm share={share} token={token} onDone={() => setEditing(false)} />}

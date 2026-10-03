@@ -5,7 +5,8 @@ import { Shell } from "./Shell";
 import { isLocal } from "./config";
 import { useIdentity } from "./identity";
 import { LocalSessions } from "./local/LocalSessions";
-import { type Route, navigate, useRoute } from "./router";
+import { type Route, useRoute } from "./router";
+import { Profile } from "./shares/Discover";
 import { Following, useImportLocalHistory } from "./shares/Following";
 import { MyShares } from "./shares/MyShares";
 import { ShareView } from "./shares/ShareView";
@@ -20,9 +21,6 @@ export function App() {
   useImportLocalHistory(token);
 
   useEffect(() => {
-    if (isLocal() && route.name === "home") navigate("/local", { replace: true });
-  }, [route.name]);
-  useEffect(() => {
     if (route.name !== "local" && route.name !== "share") document.title = "Opticon";
   }, [route.name]);
 
@@ -34,7 +32,7 @@ export function App() {
 function page(route: Route) {
   switch (route.name) {
     case "home":
-      return isLocal() ? null : <Home />;
+      return <Home />;
     case "local":
       return <LocalExplainer />;
     case "share":
@@ -43,6 +41,8 @@ function page(route: Route) {
       return <MyShares />;
     case "following":
       return <Following />;
+    case "user":
+      return <Profile key={route.login} login={route.login} />;
     case "cli":
       return <CliApprove code={route.code} />;
     case "not_found":

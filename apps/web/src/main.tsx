@@ -4,6 +4,7 @@ import { App } from "./App";
 import { isLocal, loadConfig } from "./config";
 import { IdentityProvider } from "./identity";
 import { captureSessionFromHash } from "./session";
+import { ScrollThumbs } from "./ScrollThumbs";
 
 const config = await loadConfig();
 if (!isLocal()) captureSessionFromHash();
@@ -13,6 +14,7 @@ createRoot(document.getElementById("root")!).render(
   <ConvexProvider client={convex}>
     <IdentityProvider>
       <App />
+      <ScrollThumbs />
     </IdentityProvider>
   </ConvexProvider>,
 );

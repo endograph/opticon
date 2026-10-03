@@ -6,6 +6,7 @@ import { isLive, relativeTime, useNow } from "../format";
 import { SignInButton, useToken } from "../identity";
 import { Link } from "../router";
 import { clearLocalHistory, readLocalHistory, setLocalFollowing, useLocalHistory } from "./localHistory";
+import { ProviderIcon } from "../ProviderIcon";
 
 type Followed = FunctionReturnType<typeof api.follows.list>[number];
 type Available = Extract<Followed, { available: true }>;
@@ -85,12 +86,12 @@ function FollowedMeta({ share, now }: { share: Available; now: number }) {
   const updated = new Date(share.updatedAt).toISOString();
   return (
     <>
-      <span className={`badge ${share.provider}`}>{share.provider}</span>
+      <ProviderIcon provider={share.provider} />
       {share.owner && (
-        <span className="owner">
+        <Link href={`/u/${share.owner.login}`} className="owner">
           {share.owner.avatarUrl && <img src={share.owner.avatarUrl} alt="" />}
           {share.owner.login}
-        </span>
+        </Link>
       )}
       {share.project && <span>{share.project}</span>}
       {share.unread > 0 && <span className="unread-mark">{share.unread} new</span>}
@@ -128,7 +129,7 @@ export function FollowingSidebar({ current }: { current?: string }) {
               <span className="truncate">{f.title ?? "Untitled session"}</span>
             </span>
             <span className="session-item-meta">
-              <span className={`provider-mark ${f.provider}`}>{f.provider === "claude" ? "Claude" : "Codex"}</span>
+              <ProviderIcon provider={f.provider} size={12} />
               {f.owner && <span className="truncate">{f.owner.login}</span>}
               <span className="spacer" />
               {unread > 0 && <span className="unread-mark">{unread} new</span>}

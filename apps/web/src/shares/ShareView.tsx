@@ -6,8 +6,10 @@ import { Transcript } from "../Transcript";
 import { isLocal } from "../config";
 import { formatTime } from "../format";
 import { SignInButton, useToken } from "../identity";
+import { Link } from "../router";
 import { signOut } from "../session";
 import { recordLocalVisit, setLocalFollowing, useLocalHistory } from "./localHistory";
+import { ProviderIcon } from "../ProviderIcon";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -68,12 +70,12 @@ export function ShareView({ slug }: { slug: string }) {
         <div className="session-title">
           <h1>{share.title ?? "Untitled session"}</h1>
           <div className="session-meta">
-            <span className={`badge ${share.provider}`}>{share.provider}</span>
+            <ProviderIcon provider={share.provider} />
             {owner && (
-              <span className="owner">
+              <Link href={`/u/${owner.login}`} className="owner">
                 {owner.avatarUrl && <img src={owner.avatarUrl} alt="" />}
                 {owner.login}
-              </span>
+              </Link>
             )}
             {share.project && <span>{share.project}</span>}
             <span>Updated {formatTime(new Date(share.updatedAt).toISOString())}</span>

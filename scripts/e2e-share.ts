@@ -15,7 +15,8 @@ const ROOT = join(import.meta.dir, "..");
 const CLI = join(ROOT, "apps/cli/src/main.ts");
 const DAEMON_PORT = 4391;
 const RUN = Date.now().toString(36);
-const SESSION_ID = "11111111-2222-3333-4444-555555555555";
+// Fresh per run: the dev backend keeps state between runs, so a fixed id would inherit leftover shares.
+const SESSION_ID = crypto.randomUUID();
 const KEY = `claude/${SESSION_ID}`;
 
 const dir = await mkdtemp(join(tmpdir(), "opticon-e2e-"));
@@ -39,6 +40,14 @@ const env = {
   OPTICON_PORT: String(DAEMON_PORT),
   PATH: `${join(dir, "bin")}:${process.env.PATH}`,
 };
+/** Runs an `opticon` command against the test stack and returns its output. */
+async function cli(...args: string[]): Promise<string> {
+  const proc = Bun.spawn(["bun", CLI, ...args], { env, stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  if (code !== 0) throw new Error(`opticon ${args.join(" ")} failed: ${err || out}`);
+  return out.trim();
+}
+
 const spawned: Bun.Subprocess[] = [];
 const results: Record<string, string> = {};
 let failed = false;
@@ -111,6 +120,23 @@ try {
     if (text.includes("sk-ant") || !text.includes("[REDACTED]")) throw new Error("redaction missing");
   });
 
+  await step("listing publicly is opt-in from the share dialog", async () => {
+    const listedMark = ".share-row span[title='On your profile and the public feed']";
+    await owner.goto("http://127.0.0.1:4747/shares");
+    await owner.waitForSelector(".share-row:has-text('first message')");
+    if (await owner.locator(listedMark).count()) throw new Error("listed without opting in");
+    // The dialog from creating the share is still open; reopen it as an existing share.
+    await local.keyboard.press("Escape");
+    await local.click("text=Manage…");
+    const box = local.locator(".share-dialog .discoverable input[type=checkbox]");
+    if (await box.isChecked()) throw new Error("checkbox should start unchecked");
+    await box.check();
+    await local.click("text=Save & resync");
+    await local.waitForSelector("text=Saving…", { state: "detached" });
+    await local.keyboard.press("Escape");
+    await owner.waitForSelector(listedMark, { timeout: 15_000 });
+  });
+
   await step("live update reaches viewer", async () => {
     await Bun.sleep(1000); // heartbeat -> live demand -> daemon subscribes
     const started = performance.now();
@@ -141,14 +167,14 @@ try {
   });
 
   await step("live sync off holds updates until re-enabled", async () => {
-    await local.uncheck("text=Live sync shared sessions");
+    await cli("live-sync", "off");
     const friend = await person("friend");
     await friend.goto(shareUrl);
     await friend.waitForSelector(`text=live hello ${RUN}`);
     await line({ type: "assistant", uuid: `held-${RUN}`, message: { content: [{ type: "text", text: `held ${RUN}` }] } });
     await Bun.sleep(3000);
     if (await friend.locator(`text=held ${RUN}`).count()) throw new Error("streamed while live sync was off");
-    await local.check("text=Live sync shared sessions");
+    await cli("live-sync", "on");
     await friend.waitForSelector(`text=held ${RUN}`, { timeout: 15_000 });
   });
 
@@ -197,7 +223,7 @@ try {
   await step("unsharing deletes the server copy", async () => {
     local.on("dialog", (d) => d.accept());
     await local.click("text=Manage…");
-    await local.click("text=Stop sharing");
+    await local.click(".share-dialog footer .button.danger");
     await viewer.goto(shareUrl);
     await viewer.waitForSelector("text=This share doesn't exist");
   });

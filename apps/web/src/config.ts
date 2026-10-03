@@ -25,3 +25,6 @@ export const isLocal = () => config.mode === "local";
 
 /** The address of the local app, for links from opticon.tv. */
 export const LOCAL_APP_URL = "http://127.0.0.1:4317";
+
+export const GITHUB_URL = "https://github.com/endograph/opticon";
+export const INSTALL_COMMAND = "curl -fsSL https://opticon.tv/install.sh | sh";

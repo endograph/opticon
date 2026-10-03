@@ -101,7 +101,7 @@ export const importLocal = mutation({
 });
 
 async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, viewer: Doc<"users"> | null) {
-  if (!share) return null;
+  if (!share || share.deletedAt !== undefined) return null;
   if (!decideAccess(share.access, share.ownerId, viewer).ok) return { slug: share.slug, available: false as const };
   const owner = await ctx.db.get(share.ownerId);
   return {

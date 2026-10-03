@@ -55,6 +55,10 @@ export function useAccessEditor(initial?: ShareAccess): { access: ShareAccess; e
   return { access, empty, editor };
 }
 
+/** Only the owner can open it: unshared, or synced without sharing. */
+export const isPrivate = (access: ShareAccess) =>
+  !access.anyone && !access.users.length && !access.orgs.length && !access.teams.length;
+
 /** "Anyone with the link", or "octocat, acme, acme/platform". */
 export function describeAccess(access: ShareAccess): string {
   if (access.anyone) return "Anyone with the link";
