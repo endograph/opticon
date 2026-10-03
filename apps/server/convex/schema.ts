@@ -123,4 +123,17 @@ export default defineSchema({
   })
     .index("by_share", ["shareId"])
     .index("by_share_viewer", ["shareId", "viewerId"]),
+
+  /** Shares a user has viewed, excluding their own. Unfollowing keeps the row so later views don't re-follow. */
+  follows: defineTable({
+    userId: v.id("users"),
+    shareId: v.id("shares"),
+    following: v.boolean(),
+    lastViewedAt: v.number(),
+    /** The share's event count when last viewed; newer events show as unread. */
+    seenEventCount: v.optional(v.number()),
+  })
+    .index("by_user_share", ["userId", "shareId"])
+    .index("by_user_following", ["userId", "following", "lastViewedAt"])
+    .index("by_share", ["shareId"]),
 });

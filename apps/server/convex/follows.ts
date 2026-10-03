@@ -1,0 +1,125 @@
+import { ConvexError, v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
+import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
+import { decideAccess, requireUser } from "./lib";
+import { shareBySlug, viewerCount } from "./shares";
+
+const LIST_LIMIT = 200;
+
+/**
+ * Records that a signed-in viewer has someone else's share open, and how much of it they've seen.
+ * Called from presence heartbeats. The first view follows the share; later views never re-follow,
+ * so an unfollowed share stays unfollowed until followed again. Callers check access.
+ */
+export async function recordView(ctx: MutationCtx, user: Doc<"users">, share: Doc<"shares">): Promise<void> {
+  if (share.ownerId === user._id) return;
+  const existing = await followRow(ctx, user._id, share._id);
+  const seen = { lastViewedAt: Date.now(), seenEventCount: share.eventCount };
+  if (existing) await ctx.db.patch(existing._id, seen);
+  else await ctx.db.insert("follows", { userId: user._id, shareId: share._id, following: true, ...seen });
+}
+
+export const setFollowing = mutation({
+  args: { token: v.string(), slug: v.string(), following: v.boolean() },
+  handler: async (ctx, { token, slug, following }) => {
+    const user = await requireUser(ctx, token);
+    const share = await shareBySlug(ctx, slug);
+    if (!share) throw new ConvexError({ code: "not_found" });
+    if (!decideAccess(share.access, share.ownerId, user).ok) throw new ConvexError({ code: "forbidden" });
+    if (share.ownerId === user._id) return;
+    const existing = await followRow(ctx, user._id, share._id);
+    if (existing) await ctx.db.patch(existing._id, { following });
+    else await ctx.db.insert("follows", { userId: user._id, shareId: share._id, following, lastViewedAt: Date.now() });
+  },
+});
+
+/**
+ * Shares the viewer follows, most recently viewed first. Shares they can no longer open are
+ * listed as unavailable, without details.
+ */
+export const list = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const user = await requireUser(ctx, token);
+    const rows = await ctx.db
+      .query("follows")
+      .withIndex("by_user_following", (q) => q.eq("userId", user._id).eq("following", true))
+      .order("desc")
+      .take(LIST_LIMIT);
+    const followed = await Promise.all(
+      rows.map(async (row) => {
+        const summary = await shareSummary(ctx, await ctx.db.get(row.shareId), user);
+        if (!summary) return null;
+        const unread = summary.available ? Math.max(0, summary.eventCount - (row.seenEventCount ?? summary.eventCount)) : 0;
+        return { ...summary, lastViewedAt: row.lastViewedAt, unread };
+      }),
+    );
+    return followed.filter((f) => f !== null);
+  },
+});
+
+/**
+ * Current details for a signed-out viewer's browser-stored history, checked as a signed-out
+ * viewer: only link shares are available. Removed shares are left out.
+ */
+export const resolve = query({
+  args: { slugs: v.array(v.string()) },
+  handler: async (ctx, { slugs }) => {
+    const resolved = await Promise.all(slugs.slice(0, LIST_LIMIT).map(async (slug) => shareSummary(ctx, await shareBySlug(ctx, slug), null)));
+    return resolved.filter((s) => s !== null);
+  },
+});
+
+/** Merges browser-stored history into the account after sign-in. The account's follow choice wins where both exist. */
+export const importLocal = mutation({
+  args: {
+    token: v.string(),
+    entries: v.array(
+      v.object({ slug: v.string(), lastViewedAt: v.number(), following: v.boolean(), seenEventCount: v.optional(v.number()) }),
+    ),
+  },
+  handler: async (ctx, { token, entries }) => {
+    const user = await requireUser(ctx, token);
+    for (const entry of entries.slice(0, LIST_LIMIT)) {
+      const share = await shareBySlug(ctx, entry.slug);
+      if (!share || share.ownerId === user._id || !decideAccess(share.access, share.ownerId, user).ok) continue;
+      const existing = await followRow(ctx, user._id, share._id);
+      const lastViewedAt = Math.min(entry.lastViewedAt, Date.now());
+      if (!existing) {
+        await ctx.db.insert("follows", {
+          userId: user._id,
+          shareId: share._id,
+          following: entry.following,
+          lastViewedAt,
+          seenEventCount: entry.seenEventCount,
+        });
+      } else if (lastViewedAt > existing.lastViewedAt) {
+        await ctx.db.patch(existing._id, { lastViewedAt, seenEventCount: entry.seenEventCount ?? existing.seenEventCount });
+      }
+    }
+  },
+});
+
+async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, viewer: Doc<"users"> | null) {
+  if (!share) return null;
+  if (!decideAccess(share.access, share.ownerId, viewer).ok) return { slug: share.slug, available: false as const };
+  const owner = await ctx.db.get(share.ownerId);
+  return {
+    slug: share.slug,
+    available: true as const,
+    title: share.title,
+    project: share.project,
+    provider: share.provider,
+    updatedAt: share.updatedAt,
+    eventCount: share.eventCount,
+    viewers: await viewerCount(ctx, share._id),
+    owner: owner && { login: owner.login, avatarUrl: owner.avatarUrl },
+  };
+}
+
+export async function followRow(ctx: QueryCtx, userId: Id<"users">, shareId: Id<"shares">): Promise<Doc<"follows"> | null> {
+  return ctx.db
+    .query("follows")
+    .withIndex("by_user_share", (q) => q.eq("userId", userId).eq("shareId", shareId))
+    .unique();
+}

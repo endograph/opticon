@@ -6,6 +6,7 @@ import { isLocal } from "./config";
 import { useIdentity } from "./identity";
 import { LocalSessions } from "./local/LocalSessions";
 import { type Route, navigate, useRoute } from "./router";
+import { Following, useImportLocalHistory } from "./shares/Following";
 import { MyShares } from "./shares/MyShares";
 import { ShareView } from "./shares/ShareView";
 
@@ -15,7 +16,8 @@ import { ShareView } from "./shares/ShareView";
  */
 export function App() {
   const route = useRoute();
-  const { daemon } = useIdentity();
+  const { daemon, token } = useIdentity();
+  useImportLocalHistory(token);
 
   useEffect(() => {
     if (isLocal() && route.name === "home") navigate("/local", { replace: true });
@@ -39,6 +41,8 @@ function page(route: Route) {
       return <ShareView key={route.slug} slug={route.slug} />;
     case "shares":
       return <MyShares />;
+    case "following":
+      return <Following />;
     case "cli":
       return <CliApprove code={route.code} />;
     case "not_found":

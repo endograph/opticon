@@ -1,4 +1,4 @@
-import type { RedactionFinding, SessionEvent, SessionMeta, ShareAccess, SharedEvent } from "@opticon/core";
+import type { SessionEvent, SessionMeta, ShareAccess, SharedSessionProjection } from "@opticon/core";
 import { useEffect, useRef, useState } from "react";
 
 export type Status = "loading" | "ready" | "unauthorized" | "offline" | "missing";
@@ -89,11 +89,7 @@ export function useSession(key: string | undefined) {
   return state;
 }
 
-export interface SharePreview {
-  meta: SessionMeta;
-  events: SharedEvent[];
-  findings: RedactionFinding[];
-}
+export type SharePreview = SharedSessionProjection;
 
 export async function fetchSharePreview(key: string): Promise<SharePreview> {
   const res = await fetch(`/api/sessions/${key}/share-preview`);

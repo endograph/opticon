@@ -6,7 +6,16 @@
     <!-- The compiled CLI serves bundled assets at relative paths; resolve them from the root on deep routes like /local/claude/<id>. -->
     <base href="/" />
     <title>Opticon</title>
+    <!-- Panopticon plan view: a ring of six cells. Inline so the compiled CLI, which only embeds JS and CSS, needs no extra asset. -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cstyle%3E.f%7Bfill:%231d1d1b%7D%40media (prefers-color-scheme:dark)%7B.f%7Bfill:%23e9e9e6%7D%7D%3C/style%3E%3Cpath class=%22f%22 d=%22M9.90 2.30A15 15 0 0 1 22.10 2.30L19.99 7.05A9.8 9.8 0 0 0 12.01 7.05ZM24.82 3.86A15 15 0 0 1 30.92 14.43L25.75 14.98A9.8 9.8 0 0 0 21.76 8.07ZM30.92 17.57A15 15 0 0 1 24.82 28.14L21.76 23.93A9.8 9.8 0 0 0 25.75 17.02ZM22.10 29.70A15 15 0 0 1 9.90 29.70L12.01 24.95A9.8 9.8 0 0 0 19.99 24.95ZM7.18 28.14A15 15 0 0 1 1.08 17.57L6.25 17.02A9.8 9.8 0 0 0 10.24 23.93ZM1.08 14.43A15 15 0 0 1 7.18 3.86L10.24 8.07A9.8 9.8 0 0 0 6.25 14.98Z%22/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="./src/styles.css" />
+    <script>
+      // Applied before first paint so the theme never flashes. Keep in sync with src/theme.ts.
+      try {
+        var theme = localStorage.getItem("opticon_theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

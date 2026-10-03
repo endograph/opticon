@@ -16,9 +16,15 @@ const RULE_LABELS: Record<string, string> = {
   "npm-token": "npm tokens",
   jwt: "JWTs",
   "url-credentials": "credentials in URLs",
+  "url-secret": "login or secret URL parameters",
+  "encoded-secret": "encoded sensitive values",
+  "login-code": "login codes",
   "bearer-token": "bearer tokens",
   "secret-assignment": "secret-looking values",
   "high-entropy": "random-looking strings",
+  "private-host": "private hostnames",
+  "private-address": "private network addresses",
+  email: "email addresses",
 };
 
 /**
@@ -73,6 +79,10 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
               <p>
                 Sharing uploads a copy of <strong>{messages} messages</strong> and <strong>{tools} tool steps</strong>. Tool
                 inputs, tool outputs, and thinking stay on this machine.
+              </p>
+              <p>
+                <strong>Title:</strong> {preview.meta.title ?? "(untitled)"}
+                {preview.meta.project && <><br /><strong>Project:</strong> {preview.meta.project}</>}
               </p>
               <div className="warning">
                 {redacted > 0 ? (

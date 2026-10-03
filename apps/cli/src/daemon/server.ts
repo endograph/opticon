@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectForShare } from "@opticon/core";
+import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectSessionForShare } from "@opticon/core";
 import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
 import { endpoints, readAuth } from "../account";
@@ -147,7 +147,7 @@ export async function startServer(options: DaemonOptions) {
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {
         const result = await store.events(sessionKey(req));
         if (!result) return Response.json({ error: "not found" }, { status: 404 });
-        return Response.json({ meta: result.meta, ...projectForShare(result.events) });
+        return Response.json(projectSessionForShare(result));
       }),
     },
   });

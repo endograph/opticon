@@ -1,6 +1,6 @@
 import { type FSWatcher, watch } from "node:fs";
 import { basename } from "node:path";
-import { PROTOCOL_VERSION, type SessionEvent, type ShareAccess, type SharedEvent, projectForShare } from "@opticon/core";
+import { PROTOCOL_VERSION, type ShareAccess, type SharedEvent, type SharedSessionProjection, projectSessionForShare } from "@opticon/core";
 import { api } from "@opticon/server/api";
 import { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
@@ -76,16 +76,17 @@ export class ShareSync {
     const session = await this.store.events(key);
     if (!session) throw new Error("Session not found");
     const { meta } = session;
+    const projection = projectSessionForShare(session);
     const { shareId, slug } = await client.action(api.shares.create, {
       token: auth.token,
       protocol: PROTOCOL_VERSION,
       provider: meta.provider,
       sessionId: meta.id,
-      title: meta.title,
-      project: meta.cwd ? basename(meta.cwd) : undefined,
+      title: projection.meta.title,
+      project: projection.meta.project,
       access,
     });
-    await this.upload(shareId, session.events, meta.title);
+    await this.upload(shareId, projection);
     return { slug, url: this.urlFor(slug) };
   }
 
@@ -172,7 +173,7 @@ export class ShareSync {
       void this.store
         .subscribe(key, (message: SessionMessage) => {
           // A snapshot after (re)connecting is diffed, so only real changes are sent.
-          void this.upload(shareId, message.events, message.meta.title);
+          void this.upload(shareId, projectSessionForShare(message));
         })
         .then((fn) => {
           if (stopped) fn?.();
@@ -187,14 +188,15 @@ export class ShareSync {
   }
 
   /** Projects, diffs, and uploads in batches. Serialized per share to keep order. */
-  private upload(shareId: string, events: SessionEvent[], title?: string): Promise<void> {
+  private upload(shareId: string, projection: SharedSessionProjection): Promise<void> {
+    const { title } = projection.meta;
     const previous = this.queues.get(shareId) ?? Promise.resolve();
     const next = previous
       .then(async () => {
         const { client, auth } = this.requireClient();
         const sent = this.uploaded.get(shareId) ?? new Map<string, string>();
         this.uploaded.set(shareId, sent);
-        const pending = projectForShare(events).events.filter((e) => sent.get(e.id) !== JSON.stringify(e));
+        const pending = projection.events.filter((e) => sent.get(e.id) !== JSON.stringify(e));
         for (const batch of batches(pending)) {
           await client.mutation(api.shares.append, { token: auth.token, protocol: PROTOCOL_VERSION, shareId: shareId as never, title, events: batch });
           for (const e of batch) sent.set(e.id, JSON.stringify(e));

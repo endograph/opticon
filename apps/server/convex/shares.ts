@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
+import { followRow } from "./follows";
 import { decideAccess, randomToken, requireProtocol, requireUser, userForToken } from "./lib";
 import { accessValidator, sharedEventValidator } from "./schema";
 
@@ -140,7 +141,12 @@ export const purge = internalMutation({
       .withIndex("by_share", (q) => q.eq("shareId", shareId))
       .collect();
     for (const p of viewers) await ctx.db.delete(p._id);
-    if (events.length === DELETE_BATCH) await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId });
+    const follows = await ctx.db
+      .query("follows")
+      .withIndex("by_share", (q) => q.eq("shareId", shareId))
+      .take(DELETE_BATCH);
+    for (const f of follows) await ctx.db.delete(f._id);
+    if (events.length === DELETE_BATCH || follows.length === DELETE_BATCH) await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId });
   },
 });
 
@@ -208,6 +214,8 @@ export const view = query({
       return { status: "forbidden" as const, stale: decision.stale, signedInAs: viewer?.login };
     }
     const owner = await ctx.db.get(share.ownerId);
+    const isOwner = viewer?._id === share.ownerId;
+    const follow = viewer && !isOwner ? await followRow(ctx, viewer._id, share._id) : null;
     return {
       status: "ok" as const,
       share: {
@@ -217,8 +225,10 @@ export const view = query({
         eventCount: share.eventCount,
         rev: share.rev,
         updatedAt: share.updatedAt,
-        isOwner: viewer?._id === share.ownerId,
-        access: viewer?._id === share.ownerId ? share.access : undefined,
+        isOwner,
+        access: isOwner ? share.access : undefined,
+        /** Undefined when signed out or the owner; otherwise whether the viewer follows this share. */
+        following: viewer && !isOwner ? (follow?.following ?? false) : undefined,
       },
       owner: owner && { login: owner.login, name: owner.name, avatarUrl: owner.avatarUrl },
       viewers: await viewerCount(ctx, share._id),
@@ -264,7 +274,7 @@ export async function shareBySlug(ctx: QueryCtx, slug: string): Promise<Doc<"sha
     .unique();
 }
 
-async function viewerCount(ctx: QueryCtx, shareId: Id<"shares">): Promise<number> {
+export async function viewerCount(ctx: QueryCtx, shareId: Id<"shares">): Promise<number> {
   return (
     await ctx.db
       .query("presence")

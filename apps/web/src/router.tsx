@@ -6,6 +6,7 @@ export type Route =
   | { name: "local"; key?: string }
   | { name: "share"; slug: string }
   | { name: "shares" }
+  | { name: "following" }
   | { name: "cli"; code: string }
   | { name: "not_found" };
 
@@ -17,6 +18,7 @@ export function parseRoute(path: string, search: string): Route {
   const share = path.match(/^\/s\/([\w-]+)$/);
   if (share?.[1]) return { name: "share", slug: share[1] };
   if (path === "/shares") return { name: "shares" };
+  if (path === "/following") return { name: "following" };
   if (path === "/cli") return { name: "cli", code: new URLSearchParams(search).get("code") ?? "" };
   return { name: "not_found" };
 }

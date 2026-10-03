@@ -1,6 +1,6 @@
 import type { Provider, SessionMeta } from "@opticon/core";
-import { useEffect, useMemo, useState } from "react";
-import { dayLabel, isLive, projectName, relativeTime } from "../format";
+import { useMemo, useState } from "react";
+import { dayLabel, isLive, projectName, relativeTime, useNow } from "../format";
 import { sessionKey } from "./api";
 
 const PAGE = 200;
@@ -91,13 +91,4 @@ export function SessionList(props: {
       </div>
     </>
   );
-}
-
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
 }

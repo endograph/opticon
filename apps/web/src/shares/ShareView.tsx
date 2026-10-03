@@ -7,6 +7,7 @@ import { isLocal } from "../config";
 import { formatTime } from "../format";
 import { SignInButton, useToken } from "../identity";
 import { signOut } from "../session";
+import { recordLocalVisit, setLocalFollowing, useLocalHistory } from "./localHistory";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -16,6 +17,7 @@ export function ShareView({ slug }: { slug: string }) {
   const ok = view?.status === "ok";
   const events = useShareEvents(slug, token, ok);
   usePresence(slug, token, ok);
+  useLocalVisit(slug, token, ok ? view.share.eventCount : undefined);
   useMembershipRefresh(token, view?.status === "forbidden" && view.stale);
 
   useEffect(() => {
@@ -81,9 +83,31 @@ export function ShareView({ slug }: { slug: string }) {
           {live && <span className="live-dot" />}
           {viewers} watching
         </span>
+        {(!token || share.following !== undefined) && <FollowButton slug={slug} token={token} following={share.following} />}
       </header>
       <Transcript events={(events ?? []) as SessionEvent[]} status={events ? "ready" : "loading"} />
     </>
+  );
+}
+
+/** Signed in, follows live in the account; signed out, in this browser's history. */
+function FollowButton({ slug, token, following }: { slug: string; token?: string; following?: boolean }) {
+  const setFollowing = useMutation(api.follows.setFollowing);
+  const local = useLocalHistory().find((e) => e.slug === slug);
+  const current = token ? following : local?.following;
+  const toggle = () => {
+    if (token) void setFollowing({ token, slug, following: !current });
+    else setLocalFollowing(slug, !current);
+  };
+  return (
+    <button
+      type="button"
+      className="button"
+      title={current ? "Remove from your Following list" : "Add to your Following list"}
+      onClick={toggle}
+    >
+      {current ? "Unfollow" : "Follow"}
+    </button>
   );
 }
 
@@ -160,7 +184,7 @@ function usePresence(slug: string, token: string | undefined, enabled: boolean):
     const beat = () => void heartbeat({ slug, viewerId, token }).catch(() => {});
     beat();
     const timer = setInterval(beat, HEARTBEAT_MS);
-    const onHide = () => void leave({ slug, viewerId });
+    const onHide = () => void leave({ slug, viewerId, token });
     addEventListener("pagehide", onHide);
     return () => {
       clearInterval(timer);
@@ -168,6 +192,13 @@ function usePresence(slug: string, token: string | undefined, enabled: boolean):
       onHide();
     };
   }, [slug, token, enabled, heartbeat, leave]);
+}
+
+/** Signed out, records the view in this browser's history. Signed-in views are recorded by presence heartbeats. */
+function useLocalVisit(slug: string, token: string | undefined, eventCount: number | undefined): void {
+  useEffect(() => {
+    if (!token && eventCount !== undefined) recordLocalVisit(slug, eventCount);
+  }, [slug, token, eventCount]);
 }
 
 function useMembershipRefresh(token: string | undefined, needed: boolean): void {

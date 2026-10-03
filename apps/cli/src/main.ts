@@ -6,6 +6,7 @@ import {
   SessionTail,
   listSessionFiles,
   projectForShare,
+  projectSessionForShare,
   readCodexTitles,
   readSessionMeta,
 } from "@opticon/core";
@@ -141,12 +142,13 @@ async function open(prefix: string): Promise<SessionTail> {
 async function show(prefix: string, shared: boolean) {
   const tail = await open(prefix);
   await tail.read();
-  header(tail);
   if (!shared) {
+    header(tail);
     for (const e of tail.events.values()) print(e);
     return;
   }
-  const { events, findings } = projectForShare(tail.events.values());
+  const { meta, events, findings } = projectSessionForShare({ meta: tail.meta, events: tail.events.values() });
+  console.log(`# ${meta.title ?? "(untitled)"}\n${meta.project ?? ""}\n`);
   for (const e of events) print(e);
   console.log(`\n${events.length} events would be shared.`);
   console.log(findings.length ? `Redacted: ${findings.map((f) => `${f.rule} ×${f.count}`).join(", ")}` : "Nothing redacted.");

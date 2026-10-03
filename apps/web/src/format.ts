@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 export function projectName(cwd: string): string {
   return cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 }
@@ -30,4 +32,14 @@ export function dayLabel(iso: string | undefined, now = new Date()): string {
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
 /** A session counts as live if its file changed in the last two minutes. */
+/** The current time, refreshed every `intervalMs` so relative times and live dots stay current. */
+export function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 export const isLive = (iso: string | undefined, now = Date.now()) => !!iso && now - Date.parse(iso) < 120_000;

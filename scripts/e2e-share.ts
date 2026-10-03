@@ -171,6 +171,29 @@ try {
     await local.waitForSelector("text=Manage…");
   });
 
+  await step("following tracks unread events and lost access", async () => {
+    // The anonymous viewer's browser history still has the share, which is now private.
+    await viewer.goto("http://127.0.0.1:4747/following");
+    await viewer.waitForSelector("text=Session no longer available to you");
+    const friend = await person("friend");
+    await friend.goto(shareUrl);
+    await friend.waitForSelector(`text=held ${RUN}`);
+    // The owner keeps watching, so live sync continues after the friend leaves.
+    await local.goto(`http://127.0.0.1:${DAEMON_PORT}${new URL(shareUrl).pathname}`);
+    await friend.click(".nav-item:has-text('Following')");
+    await friend.waitForSelector(".share-row:has-text('first message')");
+    await line({ type: "assistant", uuid: `unread-${RUN}`, message: { content: [{ type: "text", text: `unread ${RUN}` }] } });
+    await friend.waitForSelector(".share-row .unread-mark:has-text('1 new')", { timeout: 15_000 });
+    await friend.goto("http://127.0.0.1:4747/shares");
+    await friend.waitForSelector(".sidebar .session-item .unread-mark:has-text('1 new')");
+    await friend.screenshot({ path: join(tmpdir(), "opticon-e2e-following.png") });
+    await friend.click(".sidebar .session-item");
+    await friend.waitForSelector(`text=unread ${RUN}`);
+    await friend.waitForSelector("button:has-text('Unfollow')");
+    await local.goto(`http://127.0.0.1:${DAEMON_PORT}/local/${KEY}`);
+    await local.waitForSelector("text=Manage…");
+  });
+
   await step("unsharing deletes the server copy", async () => {
     local.on("dialog", (d) => d.accept());
     await local.click("text=Manage…");

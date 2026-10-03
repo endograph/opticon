@@ -1,22 +1,24 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation } from "./_generated/server";
+import { recordView } from "./follows";
 import { PRESENCE_TTL_MS, decideAccess, userForToken } from "./lib";
 import { shareBySlug } from "./shares";
 
 /**
  * Viewers call this every ~15s while a share is open. Presence drives live sync: the owner's
  * daemon only uploads while at least one presence row exists. Rows expire on a timer instead
- * of being filtered by time in queries, so `liveDemand` stays purely reactive.
+ * of being filtered by time in queries, so `liveDemand` stays purely reactive. For signed-in
+ * viewers it also records the view in their Following history.
  */
 export const heartbeat = mutation({
   args: { slug: v.string(), viewerId: v.string(), token: v.optional(v.string()) },
   handler: async (ctx, { slug, viewerId, token }) => {
     const share = await shareBySlug(ctx, slug);
     if (!share) throw new ConvexError({ code: "not_found" });
-    if (!decideAccess(share.access, share.ownerId, await userForToken(ctx, token)).ok) {
-      throw new ConvexError({ code: "forbidden" });
-    }
+    const user = await userForToken(ctx, token);
+    if (!decideAccess(share.access, share.ownerId, user).ok) throw new ConvexError({ code: "forbidden" });
+    if (user) await recordView(ctx, user, share);
     const now = Date.now();
     const existing = await ctx.db
       .query("presence")
@@ -28,11 +30,14 @@ export const heartbeat = mutation({
   },
 });
 
+/** Also records a final view, so events seen since the last heartbeat don't show as unread. */
 export const leave = mutation({
-  args: { slug: v.string(), viewerId: v.string() },
-  handler: async (ctx, { slug, viewerId }) => {
+  args: { slug: v.string(), viewerId: v.string(), token: v.optional(v.string()) },
+  handler: async (ctx, { slug, viewerId, token }) => {
     const share = await shareBySlug(ctx, slug);
     if (!share) return;
+    const user = await userForToken(ctx, token);
+    if (user && decideAccess(share.access, share.ownerId, user).ok) await recordView(ctx, user, share);
     const existing = await ctx.db
       .query("presence")
       .withIndex("by_share_viewer", (q) => q.eq("shareId", share._id).eq("viewerId", viewerId))

@@ -11,6 +11,7 @@ const modules = {
   "../convex/auth.ts": () => import("../convex/auth"),
   "../convex/shares.ts": () => import("../convex/shares"),
   "../convex/presence.ts": () => import("../convex/presence"),
+  "../convex/follows.ts": () => import("../convex/follows"),
   "../convex/access.ts": () => import("../convex/access"),
   "../convex/http.ts": () => import("../convex/http"),
 };
@@ -151,6 +152,87 @@ describe("presence and live demand", () => {
   test("heartbeats are rejected for viewers without access", async () => {
     const { t, slug } = await setup(PRIVATE_ACCESS);
     await expect(t.mutation(api.presence.heartbeat, { slug, viewerId: "v" })).rejects.toThrow(/forbidden/);
+  });
+});
+
+describe("follows", () => {
+  const view = (t: T, slug: string, token: string) => t.mutation(api.presence.heartbeat, { slug, viewerId: token, token });
+
+  test("viewing follows a share; unfollowing sticks across later views", async () => {
+    const { t, owner, slug } = await setup();
+    const viewer = await signIn(t, "viewer");
+
+    await view(t, slug, owner);
+    expect(await t.run((ctx) => ctx.db.query("follows").collect())).toEqual([]);
+
+    await view(t, slug, viewer);
+    expect((await t.query(api.follows.list, { token: viewer })).map((f) => f.slug)).toEqual([slug]);
+    expect(await t.query(api.shares.view, { slug, token: viewer })).toMatchObject({ share: { following: true } });
+
+    await t.mutation(api.follows.setFollowing, { token: viewer, slug, following: false });
+    await view(t, slug, viewer);
+    expect(await t.query(api.follows.list, { token: viewer })).toEqual([]);
+    expect(await t.query(api.shares.view, { slug, token: viewer })).toMatchObject({ share: { following: false } });
+  });
+
+  test("events added since the last view count as unread until the viewer leaves", async () => {
+    const { t, owner, shareId, slug } = await setup();
+    const viewer = await signIn(t, "viewer");
+    const append = (events: SharedEvent[]) => t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events });
+    await append([msg("a", "hi")]);
+    await view(t, slug, viewer);
+    await append([msg("b", "more"), tool("t", "running")]);
+    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 2, eventCount: 3, viewers: 1 }]);
+
+    await t.mutation(api.presence.leave, { slug, viewerId: viewer, token: viewer });
+    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 0, viewers: 0 }]);
+  });
+
+  test("lost access leaves an unavailable entry, and unsharing deletes it", async () => {
+    const { t, owner, shareId, slug } = await setup();
+    const viewer = await signIn(t, "viewer");
+    await view(t, slug, viewer);
+
+    await t.mutation(api.shares.setAccess, { token: owner, shareId, access: PRIVATE_ACCESS });
+    const [entry] = await t.query(api.follows.list, { token: viewer });
+    expect(entry).toEqual({ slug, available: false, lastViewedAt: expect.any(Number), unread: 0 });
+    await expect(view(t, slug, viewer)).rejects.toThrow(/forbidden/);
+
+    await t.mutation(api.shares.remove, { token: owner, shareId });
+    await t.finishAllScheduledFunctions(() => {});
+    expect(await t.run((ctx) => ctx.db.query("follows").collect())).toEqual([]);
+  });
+});
+
+describe("browser history", () => {
+  test("resolve returns details for link shares and marks others unavailable", async () => {
+    const { t, owner, shareId, slug } = await setup();
+    expect(await t.query(api.follows.resolve, { slugs: [slug, "missing"] })).toMatchObject([{ slug, available: true, title: "Demo" }]);
+    await t.mutation(api.shares.setAccess, { token: owner, shareId, access: PRIVATE_ACCESS });
+    expect(await t.query(api.follows.resolve, { slugs: [slug] })).toEqual([{ slug, available: false }]);
+  });
+
+  test("importLocal adds new follows and keeps the account's choice for existing ones", async () => {
+    const { t, slug } = await setup();
+    const other = await t.action(api.shares.create, {
+      token: await signIn(t, "other"),
+      protocol: PROTOCOL_VERSION,
+      provider: "codex",
+      sessionId: "s2",
+      access: LINK_ACCESS,
+    });
+    const viewer = await signIn(t, "viewer");
+    await t.mutation(api.follows.setFollowing, { token: viewer, slug, following: false });
+
+    await t.mutation(api.follows.importLocal, {
+      token: viewer,
+      entries: [
+        { slug, lastViewedAt: Date.now(), following: true },
+        { slug: other.slug, lastViewedAt: 1, following: true },
+        { slug: "missing", lastViewedAt: 1, following: true },
+      ],
+    });
+    expect((await t.query(api.follows.list, { token: viewer })).map((f) => f.slug)).toEqual([other.slug]);
   });
 });
 
