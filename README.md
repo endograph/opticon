@@ -2,6 +2,12 @@
 
 https://opticon.tv
 
+```sh
+curl -fsSL https://opticon.tv/install.sh | sh
+```
+
+macOS and Linux (arm64, x64). Installs to `~/.opticon/bin`. Update with `opticon update`.
+
 - Reads Claude Code sessions from `~/.claude` and Codex sessions from `~/.codex` on your machine.
 - `opticon web` runs a local daemon and opens your sessions in the browser, updating live as they're written.
 - `opticon web --tailscale` serves the same view to your other devices on your tailnet.

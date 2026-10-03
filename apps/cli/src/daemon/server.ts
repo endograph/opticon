@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectForShare } from "@opticon/core";
+import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
 import { endpoints, readAuth } from "../account";
 import { type SessionKey, SessionStore } from "./store";
@@ -49,6 +50,14 @@ export async function startServer(options: DaemonOptions) {
 
   const sessionKey = (req: Bun.BunRequest<"/api/sessions/:provider/:id">) =>
     `${req.params.provider}/${req.params.id}` as SessionKey;
+
+  // Bun computes the bundled UI's asset URLs relative to the working directory, not the HTML
+  // file, so starting the daemon from elsewhere (e.g. apps/cli) yields unloadable `/../…`
+  // script paths and a blank page. Run from the web app's directory when running from source;
+  // the compiled binary embeds the UI and is unaffected.
+  if (!import.meta.dir.startsWith("/$bunfs")) {
+    process.chdir(dirname(Bun.resolveSync("@opticon/web/index.html", import.meta.dir)));
+  }
 
   const server = Bun.serve({
     hostname: "127.0.0.1",

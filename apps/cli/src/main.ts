@@ -14,6 +14,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { clearAuth, endpoints, login, readAuth } from "./account";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 import { DEFAULT_TAILSCALE_PORT, serveOnTailnet, stopServing } from "./tailscale";
+import { update } from "./update";
 
 const HELP = `opticon ${VERSION} (protocol v${PROTOCOL_VERSION})
 
@@ -30,6 +31,7 @@ Usage:
   opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
   opticon show <id> [--shared]     Print a transcript (--shared: exactly what sharing would upload)
   opticon watch <id>               Print a transcript, then follow it live
+  opticon update [version]         Update to the latest release (or the given version)
   opticon version                  Print the version
 `;
 
@@ -73,6 +75,12 @@ switch (command) {
     break;
   case "watch":
     await follow(requireArg(args[0]));
+    break;
+  case "update":
+    await update(args[0]).catch((error: Error) => {
+      console.error(error.message);
+      process.exit(1);
+    });
     break;
   case "version":
   case "--version":
