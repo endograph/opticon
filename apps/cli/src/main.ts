@@ -1,0 +1,129 @@
+#!/usr/bin/env bun
+import { watch } from "node:fs";
+import {
+  PROTOCOL_VERSION,
+  type SessionEvent,
+  SessionTail,
+  listSessionFiles,
+  projectForShare,
+  readCodexTitles,
+  readSessionMeta,
+} from "@opticon/core";
+
+const HELP = `opticon (protocol v${PROTOCOL_VERSION})
+
+Usage:
+  opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
+  opticon show <id> [--shared]     Print a transcript (--shared: exactly what sharing would upload)
+  opticon watch <id>               Print a transcript, then follow it live
+`;
+
+const [command, ...args] = process.argv.slice(2);
+
+switch (command) {
+  case "sessions":
+    await sessions(Number(flag("--limit") ?? 20));
+    break;
+  case "show":
+    await show(requireArg(args[0]), args.includes("--shared"));
+    break;
+  case "watch":
+    await follow(requireArg(args[0]));
+    break;
+  default:
+    process.stdout.write(HELP);
+    process.exit(command && command !== "help" ? 1 : 0);
+}
+
+async function sessions(limit: number) {
+  const [files, titles] = await Promise.all([listSessionFiles(), readCodexTitles()]);
+  const metas = await Promise.all(files.slice(0, limit).map((f) => readSessionMeta(f, titles)));
+  for (const m of metas) {
+    const when = m.updatedAt?.slice(0, 16).replace("T", " ") ?? "";
+    console.log(`${m.provider.padEnd(6)} ${m.id.slice(0, 8)}  ${when}  ${(m.title ?? "(untitled)").slice(0, 60).padEnd(60)}  ${m.cwd ?? ""}`);
+  }
+}
+
+async function open(prefix: string): Promise<SessionTail> {
+  const [files, titles] = await Promise.all([listSessionFiles(), readCodexTitles()]);
+  // Ids appear in both providers' filenames, so match on the path instead of reading every file.
+  const matches = files.filter((f) => f.path.split("/").at(-1)?.includes(prefix));
+  if (matches.length !== 1) {
+    console.error(matches.length ? `"${prefix}" is ambiguous (${matches.length} matches)` : `No session matching "${prefix}"`);
+    process.exit(1);
+  }
+  const file = matches[0]!;
+  const meta = await readSessionMeta(file, titles);
+  return new SessionTail(file.provider, file.path, meta.title);
+}
+
+async function show(prefix: string, shared: boolean) {
+  const tail = await open(prefix);
+  await tail.read();
+  header(tail);
+  if (!shared) {
+    for (const e of tail.events.values()) print(e);
+    return;
+  }
+  const { events, findings } = projectForShare(tail.events.values());
+  for (const e of events) print(e);
+  console.log(`\n${events.length} events would be shared.`);
+  console.log(findings.length ? `Redacted: ${findings.map((f) => `${f.rule} ×${f.count}`).join(", ")}` : "Nothing redacted.");
+}
+
+async function follow(prefix: string) {
+  const tail = await open(prefix);
+  await tail.read();
+  header(tail);
+  for (const e of tail.events.values()) print(e);
+  console.log("\n— following, ctrl-c to stop —\n");
+  let pending = Promise.resolve();
+  const pump = () => {
+    pending = pending.then(async () => {
+      const { changed, reset } = await tail.read();
+      if (reset) console.log("— file rewritten, restarting —");
+      for (const e of changed) print(e);
+    });
+  };
+  watch(tail.path, pump);
+  // FSEvents can coalesce or drop events; a slow poll guarantees progress.
+  setInterval(pump, 2000);
+}
+
+function header(tail: SessionTail) {
+  const m = tail.meta;
+  console.log(`# ${m.title ?? "(untitled)"}\n${m.provider} ${m.id}  ${m.cwd ?? ""}${m.gitBranch ? ` @ ${m.gitBranch}` : ""}\n`);
+}
+
+function print(e: SessionEvent | ReturnType<typeof projectForShare>["events"][number]) {
+  switch (e.kind) {
+    case "message":
+      console.log(`${e.role === "user" ? "▶ user" : "◀ assistant"}\n${e.text}\n`);
+      break;
+    case "thinking":
+      console.log(`  ∴ ${e.text.split("\n", 1)[0]?.slice(0, 100)}`);
+      break;
+    case "tool": {
+      const icon = { running: "…", ok: "✓", error: "✗" }[e.status];
+      const summary = "summary" in e && e.summary ? `  ${e.summary}` : "";
+      console.log(`  ${icon} [${e.category}] ${e.name}${summary}`);
+      break;
+    }
+    case "notice":
+      console.log(`  — ${e.text} —`);
+      break;
+  }
+}
+
+function flag(name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args[i + 1];
+}
+
+function requireArg(value: string | undefined): string {
+  if (!value) {
+    process.stdout.write(HELP);
+    process.exit(1);
+  }
+  return value;
+}

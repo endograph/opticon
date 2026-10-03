@@ -1,0 +1,11 @@
+{
+  "name": "@opticon/cli",
+  "private": true,
+  "type": "module",
+  "bin": { "opticon": "./src/main.ts" },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "build": "bun build --compile --minify src/main.ts --outfile dist/opticon"
+  },
+  "dependencies": { "@opticon/core": "workspace:*" }
+}
