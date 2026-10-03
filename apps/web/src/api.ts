@@ -1,22 +1,46 @@
-import type { RedactionFinding, SessionEvent, SessionMeta, SharedEvent } from "@opticon/core";
+import type { RedactionFinding, SessionEvent, SessionMeta, ShareAccess, SharedEvent } from "@opticon/core";
 import { useEffect, useRef, useState } from "react";
 
 export type Status = "loading" | "ready" | "unauthorized" | "offline" | "missing";
 
 export const sessionKey = (m: Pick<SessionMeta, "provider" | "id">) => `${m.provider}/${m.id}`;
 
+export interface Account {
+  configured: boolean;
+  signedIn: boolean;
+  login?: string;
+  liveSync: boolean;
+  webUrl?: string;
+  error?: string;
+}
+
+export interface MyShare {
+  shareId: string;
+  slug: string;
+  url: string;
+  provider: SessionMeta["provider"];
+  sessionId: string;
+  title?: string;
+  access: ShareAccess;
+  eventCount: number;
+  viewers: number;
+}
+
 type ListMessage =
   | { type: "list"; sessions: SessionMeta[] }
-  | { type: "change"; upserted: SessionMeta[]; removed: string[] };
+  | { type: "change"; upserted: SessionMeta[]; removed: string[] }
+  | { type: "shares"; account: Account; shares: MyShare[] };
 
-/** Live list of local sessions, newest first. */
+/** Live list of local sessions (newest first), plus sharing state from the daemon. */
 export function useSessionList() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [status, setStatus] = useState<Status>("loading");
+  const [sharing, setSharing] = useState<{ account?: Account; shares: MyShare[] }>({ shares: [] });
 
   useEffect(() => {
     return subscribe<ListMessage>("/api/sessions/stream", "/api/sessions", setStatus, (message) => {
       if (message.type === "list") return setSessions(message.sessions);
+      if (message.type === "shares") return setSharing({ account: message.account, shares: message.shares });
       setSessions((current) => {
         const byKey = new Map(current.map((s) => [sessionKey(s), s]));
         for (const s of message.upserted) byKey.set(sessionKey(s), s);
@@ -26,7 +50,7 @@ export function useSessionList() {
     });
   }, []);
 
-  return { sessions, status };
+  return { sessions, status, ...sharing };
 }
 
 type SessionMessage = { type: "snapshot" | "reset" | "events"; meta: SessionMeta; events: SessionEvent[] };
@@ -68,6 +92,22 @@ export async function fetchSharePreview(key: string): Promise<SharePreview> {
   const res = await fetch(`/api/sessions/${key}/share-preview`);
   if (!res.ok) throw new Error(`Preview failed (${res.status})`);
   return res.json();
+}
+
+export const createShare = (key: string, access: ShareAccess) =>
+  send<{ slug: string; url: string }>("POST", `/api/sessions/${key}/share`, { access });
+export const deleteShare = (shareId: string) => send("DELETE", `/api/shares/${shareId}`);
+export const setLiveSync = (liveSync: boolean) => send("POST", "/api/settings", { liveSync });
+
+async function send<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: { "content-type": "application/json", "x-opticon": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
+  return data as T;
 }
 
 /**

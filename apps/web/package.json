@@ -4,18 +4,22 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p .",
-    "build": "bun build ./index.html --outdir dist --minify"
+    "build": "bun build ./index.html --outdir dist --minify",
+    "build:hosted": "bun build ./hosted.html --outdir dist-hosted --minify",
+    "dev:hosted": "bun --hot hosted-server.ts"
   },
   "dependencies": {
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "convex": "^1.46.0"
   },
   "devDependencies": {
     "@opticon/core": "workspace:*",
     "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0"
+    "@types/react-dom": "^19.3.0",
+    "@opticon/server": "workspace:*"
   },
   "exports": {
     "./index.html": "./index.html"

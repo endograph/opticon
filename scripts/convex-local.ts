@@ -64,7 +64,7 @@ const env = { ...process.env, CONVEX_SELF_HOSTED_URL: URL, CONVEX_SELF_HOSTED_AD
 delete env.CONVEX_DEPLOYMENT;
 delete env.CONVEX_AGENT_MODE;
 // Dev-only backend settings. OPTICON_DEV_AUTH enables passwordless /auth/dev logins.
-const devEnv = { OPTICON_DEV_AUTH: "1", OPTICON_WEB_URL: process.env.OPTICON_WEB_URL ?? "http://127.0.0.1:4320" };
+const devEnv = { OPTICON_DEV_AUTH: "1", OPTICON_WEB_URL: process.env.OPTICON_WEB_URL ?? "http://127.0.0.1:4747" };
 for (const [name, value] of Object.entries(devEnv)) {
   await Bun.spawn(["bunx", "convex", "env", "set", name, value], { cwd: join(ROOT, "apps/server"), env, stdout: "ignore" }).exited;
 }

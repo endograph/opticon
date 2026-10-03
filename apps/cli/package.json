@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@opticon/core": "workspace:*",
-    "@opticon/web": "workspace:*"
+    "@opticon/web": "workspace:*",
+    "@opticon/server": "workspace:*",
+    "convex": "^1.46.0"
   }
 }

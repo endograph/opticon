@@ -13,7 +13,7 @@ import { randomToken, sha256 } from "./lib";
  */
 const http = httpRouter();
 
-const webUrl = () => (process.env.OPTICON_WEB_URL ?? "http://127.0.0.1:4320").replace(/\/$/, "");
+const webUrl = () => (process.env.OPTICON_WEB_URL ?? "http://127.0.0.1:4747").replace(/\/$/, "");
 
 /** Only allow redirects back to the hosted web app, never elsewhere. */
 function safeRedirect(raw: string | null): string {

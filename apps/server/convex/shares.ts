@@ -204,7 +204,8 @@ export const view = query({
     const viewer = await userForToken(ctx, token);
     const decision = decideAccess(share.access, share.ownerId, viewer);
     if (!decision.ok) {
-      return { status: decision.reason, stale: decision.reason === "forbidden" && decision.stale, signedInAs: viewer?.login };
+      if (decision.reason === "login_required") return { status: "login_required" as const };
+      return { status: "forbidden" as const, stale: decision.stale, signedInAs: viewer?.login };
     }
     const owner = await ctx.db.get(share.ownerId);
     return {

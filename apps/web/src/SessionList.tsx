@@ -1,5 +1,5 @@
 import type { Provider, SessionMeta } from "@opticon/core";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { sessionKey } from "./api";
 import { dayLabel, isLive, projectName, relativeTime } from "./format";
 
@@ -7,7 +7,9 @@ const PAGE = 200;
 
 export function SessionList(props: {
   sessions: SessionMeta[];
+  shared: Set<string>;
   loading: boolean;
+  footer?: ReactNode;
   selected?: string;
   onSelect: (key: string) => void;
 }) {
@@ -74,6 +76,7 @@ export function SessionList(props: {
                     <span className={`provider-mark ${s.provider}`}>{s.provider === "claude" ? "Claude" : "Codex"}</span>
                     {s.cwd && <span className="truncate">{projectName(s.cwd)}</span>}
                     <span className="spacer" />
+                    {props.shared.has(key) && <span className="shared-mark">Shared</span>}
                     <span>{relativeTime(s.updatedAt, now)}</span>
                   </span>
                 </button>
@@ -87,6 +90,7 @@ export function SessionList(props: {
           </button>
         )}
       </div>
+      {props.footer && <div className="sidebar-footer">{props.footer}</div>}
     </nav>
   );
 }

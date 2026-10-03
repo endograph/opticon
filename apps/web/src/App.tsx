@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { type Status, sessionKey, useSession, useSessionList } from "./api";
+import { type Account, type Status, sessionKey, setLiveSync, useSession, useSessionList } from "./api";
 import { SessionList } from "./SessionList";
-import { SharePreviewDialog } from "./SharePreview";
+import { ShareDialog } from "./ShareDialog";
 import { Transcript } from "./Transcript";
 import { formatTime, projectName } from "./format";
 
@@ -22,12 +22,14 @@ function useRoute(): [string | undefined, (key: string) => void] {
 }
 
 export function App() {
-  const { sessions, status } = useSessionList();
+  const { sessions, status, account, shares } = useSessionList();
   const [selected, select] = useRoute();
   const session = useSession(selected);
   const [sharing, setSharing] = useState(false);
 
   const meta = session.meta ?? sessions.find((s) => sessionKey(s) === selected);
+  const sharedKeys = new Set(shares.map((s) => `${s.provider}/${s.sessionId}`));
+  const share = shares.find((s) => `${s.provider}/${s.sessionId}` === selected);
   useEffect(() => {
     document.title = meta?.title ? `${meta.title} · Opticon` : "Opticon";
   }, [meta?.title]);
@@ -36,7 +38,14 @@ export function App() {
 
   return (
     <div className="app">
-      <SessionList sessions={sessions} loading={status === "loading"} selected={selected} onSelect={select} />
+      <SessionList
+        sessions={sessions}
+        shared={sharedKeys}
+        loading={status === "loading"}
+        selected={selected}
+        onSelect={select}
+        footer={<AccountFooter account={account} />}
+      />
       <main className="main">
         {!selected ? (
           <div className="empty">
@@ -55,15 +64,52 @@ export function App() {
                   {meta?.startedAt && <span>{formatTime(meta.startedAt)}</span>}
                 </div>
               </div>
+              {share && (
+                <a className="share-badge" href={share.url} target="_blank" rel="noreferrer" title={share.url}>
+                  Shared{share.viewers > 0 ? ` · ${share.viewers} watching` : ""}
+                </a>
+              )}
               <button type="button" className="button" disabled={session.status !== "ready"} onClick={() => setSharing(true)}>
-                Share…
+                {share ? "Manage…" : "Share…"}
               </button>
             </header>
             <Transcript key={selected} events={session.events} status={session.status} />
-            {sharing && <SharePreviewDialog sessionKey={selected} onClose={() => setSharing(false)} />}
+            {sharing && <ShareDialog sessionKey={selected} share={share} account={account} onClose={() => setSharing(false)} />}
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function AccountFooter({ account }: { account?: Account }) {
+  // Optimistic: show the new value at once; the server's value wins when it arrives.
+  const [liveSync, setLocalLiveSync] = useState(account?.liveSync ?? true);
+  useEffect(() => setLocalLiveSync(account?.liveSync ?? true), [account?.liveSync]);
+  if (!account?.configured) return null;
+  if (!account.signedIn) {
+    return (
+      <p className="hint">
+        Run <code>opticon login</code> to share sessions.
+      </p>
+    );
+  }
+  return (
+    <div className="account">
+      <span className="truncate">
+        Signed in as <strong>{account.login}</strong>
+      </span>
+      <label className="toggle" title="Stream new messages to shared sessions while someone is viewing">
+        <input
+          type="checkbox"
+          checked={liveSync}
+          onChange={(e) => {
+            setLocalLiveSync(e.target.checked);
+            void setLiveSync(e.target.checked);
+          }}
+        />
+        Live sync shared sessions
+      </label>
     </div>
   );
 }

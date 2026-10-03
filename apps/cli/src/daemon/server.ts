@@ -1,6 +1,7 @@
-import { PROTOCOL_VERSION, projectForShare } from "@opticon/core";
+import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectForShare } from "@opticon/core";
 import index from "@opticon/web/index.html";
 import { type SessionKey, SessionStore } from "./store";
+import { ShareSync } from "./sync";
 
 const COOKIE = "opticon_local";
 
@@ -17,6 +18,8 @@ export interface DaemonOptions {
 export async function startServer(options: DaemonOptions) {
   const store = new SessionStore();
   await store.start();
+  const sync = new ShareSync(store);
+  await sync.start();
   const allowedHosts = new Set([`127.0.0.1:${options.port}`, `localhost:${options.port}`]);
 
   const guard =
@@ -24,8 +27,17 @@ export async function startServer(options: DaemonOptions) {
     (req: Bun.BunRequest<any>): Response | Promise<Response> => {
       if (!allowedHosts.has(req.headers.get("host") ?? "")) return new Response("Bad host", { status: 421 });
       if (req.cookies.get(COOKIE) !== options.token) return Response.json({ error: "unauthorized" }, { status: 401 });
+      // A custom header can't be sent cross-origin without a CORS preflight, which we never grant.
+      if (req.method !== "GET" && req.headers.get("x-opticon") !== "1") return Response.json({ error: "csrf" }, { status: 403 });
       return handler(req);
     };
+
+  const failure = (error: unknown) => Response.json({ error: (error as Error).message }, { status: 400 });
+  const shareState = () => ({
+    type: "shares",
+    account: sync.account,
+    shares: sync.shares.map((s) => ({ ...s, url: sync.urlFor(s.slug) })),
+  });
 
   const sessionKey = (req: Bun.BunRequest<"/api/sessions/:provider/:id">) =>
     `${req.params.provider}/${req.params.id}` as SessionKey;
@@ -46,7 +58,9 @@ export async function startServer(options: DaemonOptions) {
         const url = new URL(req.url);
         if (url.searchParams.get("token") !== options.token) return new Response("Invalid token", { status: 401 });
         req.cookies.set(COOKIE, options.token, { httpOnly: true, sameSite: "strict", path: "/", maxAge: 60 * 60 * 24 * 365 });
-        return Response.redirect(url.searchParams.get("next")?.startsWith("/") ? url.searchParams.get("next")! : "/", 302);
+        const next = url.searchParams.get("next") ?? "/";
+        // "//host" is protocol-relative, i.e. an external redirect.
+        return Response.redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/", 302);
       },
 
       "/api/sessions": guard(() => Response.json(store.list())),
@@ -54,7 +68,13 @@ export async function startServer(options: DaemonOptions) {
       "/api/sessions/stream": guard((req) =>
         sse(req.signal, (send) => {
           send({ type: "list", sessions: store.list() });
-          return store.onList((change) => send({ type: "change", ...change }));
+          send(shareState());
+          const offList = store.onList((change) => send({ type: "change", ...change }));
+          const offShares = sync.onChange(() => send(shareState()));
+          return () => {
+            offList();
+            offShares();
+          };
         }),
       ),
 
@@ -77,6 +97,23 @@ export async function startServer(options: DaemonOptions) {
         });
       }),
 
+      "/api/sessions/:provider/:id/share": guard(async (req) => {
+        if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+        const { access } = (await req.json()) as { access: ShareAccess };
+        return sync.share(sessionKey(req), normalizeAccess(access)).then((r) => Response.json(r), failure);
+      }),
+
+      "/api/shares/:shareId": guard(async (req) => {
+        if (req.method !== "DELETE") return new Response("Method not allowed", { status: 405 });
+        return sync.unshare(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
+      }),
+
+      "/api/settings": guard(async (req) => {
+        if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+        const { liveSync } = (await req.json()) as { liveSync: boolean };
+        return sync.setLiveSync(liveSync).then(() => Response.json({ ok: true }), failure);
+      }),
+
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {
         const result = await store.events(sessionKey(req));
         if (!result) return Response.json({ error: "not found" }, { status: 404 });
@@ -85,7 +122,7 @@ export async function startServer(options: DaemonOptions) {
     },
   });
 
-  return { server, store };
+  return { server, store, sync };
 }
 
 /** Server-sent events with heartbeats. `subscribe` returns its cleanup. */

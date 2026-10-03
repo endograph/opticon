@@ -14,11 +14,13 @@ View your local Claude Code and Codex sessions in a browser, and share chosen se
 
 ```
 packages/core   session discovery, provider parsers, file tailer, redaction, share projection
-apps/cli        `opticon` binary (Bun): commands, daemon (session store + local server)
-apps/web        React UI, bundled by Bun's HTML imports and embedded in the binary
+                (`@opticon/core/protocol` is the dependency-free wire contract the server imports)
+apps/cli        `opticon` binary (Bun): commands, daemon (session store, share sync, local server)
+apps/web        React UIs: index.html is the local app embedded in the binary;
+                hosted.html is opticon.com (share viewer, sign-in, CLI login approval)
+apps/server     Convex backend: auth, shares, presence
+scripts/        isolated local Convex backend, end-to-end test
 ```
-
-Planned: `convex/` (shares, ACLs, presence, CLI auth). `apps/web` will also deploy to opticon.com for shared views.
 
 ## Daemon
 
@@ -27,6 +29,16 @@ Planned: `convex/` (shares, ACLs, presence, CLI auth). `apps/web` will also depl
 - Changes arrive via recursive `fs.watch`, debounced. A 3s poll of open sessions and a 60s rescan cover events FSEvents drops.
 - The local server binds to `127.0.0.1` only. `/api/*` (except `/api/health`) requires the `opticon_local` cookie, which `opticon web` sets through `/auth?token=…` (token in `~/.opticon/local-token`). Requests with a non-loopback `Host` header are rejected to block DNS rebinding.
 - `opticon web` heals the daemon: it starts one if none is healthy, and replaces one running a different version.
+
+## Sharing backend (`apps/server/convex`)
+
+- **Auth.** The web signs in with GitHub OAuth (`read:org`) via HTTP actions and gets a session token in the URL fragment. `opticon login` is device-style: the CLI shows a code, the user approves it at `/cli` on the web, and the CLI polls for a token. Only SHA-256 token hashes are stored. Functions take the token as an argument; there's no Convex Auth.
+- **Shares.** `shares.append` upserts events by id. `seq` (position) is fixed on first insert; `rev` bumps on every change. Viewers page through `shares.changes` from rev 0, then subscribe at their latest rev.
+- **Live sync.** Viewers heartbeat `presence`; rows expire through scheduled functions, so queries never filter by time. The daemon subscribes to `shares.liveDemand` and streams only demanded sessions.
+- **Access.** Checked by `decideAccess` (`lib.ts`) against the viewer's cached GitHub orgs and teams. `access.refreshMemberships` refreshes the cache with the viewer's own token when a decision is stale.
+- Generate secrets (slugs, tokens, login codes) only in actions or HTTP actions; queries and mutations get deterministic randomness.
+
+**Never run `convex dev` in anonymous/agent mode.** On a shared machine it pushes to a deployment other projects use and replaces their functions. Use `scripts/convex-local.ts`, which runs its own backend in `.convex-local/` on port 3310.
 
 ## Session formats
 
@@ -64,8 +76,21 @@ bun install
 bun test               # all tests
 bun run typecheck
 bun opticon sessions   # run the CLI from source
-bun run dev            # daemon from source with web hot reload; then `bun opticon web`
 cd apps/cli && bun link   # global `opticon` pointing at source
+bun run e2e            # full sharing flow in Chrome against an isolated local stack
 ```
+
+Local sharing stack, each in its own terminal:
+
+```sh
+bun run convex                             # isolated Convex backend :3310, pushes on change
+bun --hot apps/web/hosted-server.ts        # hosted web :4747 (dev sign-in, no GitHub needed)
+OPTICON_DEV=1 bun run dev                  # daemon from source; then `OPTICON_DEV=1 bun opticon web`
+OPTICON_DEV=1 bun opticon login
+```
+
+`OPTICON_DEV=1` points the CLI at the local stack. The local backend sets `OPTICON_DEV_AUTH=1`, which enables passwordless `/auth/dev` sign-in; never set it on a production deployment.
+
+Production needs a Convex deployment with `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `OPTICON_WEB_URL` set, the hosted build (`bun run --filter @opticon/web build:hosted`) served with a `/config.json`, and the production endpoints filled in as the defaults in `apps/cli/src/account.ts` (today they come only from `OPTICON_CONVEX_URL` / `OPTICON_CONVEX_SITE_URL` or `OPTICON_DEV`).
 
 Distribution is a compiled Bun binary (`bun run --filter @opticon/cli build`) installed via `curl | sh`. No npm distribution.

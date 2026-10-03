@@ -9,12 +9,18 @@ import {
   readCodexTitles,
   readSessionMeta,
 } from "@opticon/core";
+import { api } from "@opticon/server/api";
+import { ConvexHttpClient } from "convex/browser";
+import { clearAuth, endpoints, login, readAuth } from "./account";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 
 const HELP = `opticon ${VERSION} (protocol v${PROTOCOL_VERSION})
 
 Usage:
   opticon web                      Open your sessions in the browser (starts the daemon if needed)
+  opticon login                    Sign in with GitHub to share sessions
+  opticon logout                   Sign out on this machine
+  opticon whoami                   Show who you're signed in as
   opticon daemon                   Run the daemon in the foreground
   opticon stop                     Stop the background daemon
   opticon sessions [--limit N]     List local Claude Code and Codex sessions, newest first
@@ -28,6 +34,26 @@ switch (command) {
   case "web":
     await web();
     break;
+  case "login": {
+    const auth = await login(openUrl);
+    console.log(`Signed in as ${auth.login}.`);
+    break;
+  }
+  case "logout": {
+    const auth = await readAuth();
+    const ep = endpoints();
+    if (auth && ep) await new ConvexHttpClient(ep.convexUrl).mutation(api.auth.logout, { token: auth.token }).catch(() => {});
+    await clearAuth();
+    console.log(auth ? "Signed out." : "Not signed in.");
+    break;
+  }
+  case "whoami": {
+    const auth = await readAuth();
+    const ep = endpoints();
+    const me = auth && ep ? await new ConvexHttpClient(ep.convexUrl).query(api.auth.me, { token: auth.token }).catch(() => null) : null;
+    console.log(me ? `${me.login}${me.liveSync ? "" : " (live sync off)"}` : "Not signed in. Run `opticon login`.");
+    break;
+  }
   case "daemon":
     await runDaemon(flag("--port") ? Number(flag("--port")) : undefined);
     break;
@@ -51,9 +77,12 @@ switch (command) {
 async function web() {
   const { port } = await ensureDaemon();
   const url = `http://127.0.0.1:${port}/auth?token=${encodeURIComponent(await localToken())}`;
+  console.log((await openUrl(url)) ? `Opened http://127.0.0.1:${port}` : `Open this URL in your browser:\n${url}`);
+}
+
+async function openUrl(url: string): Promise<boolean> {
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  const opened = await Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" }).exited.catch(() => 1);
-  console.log(opened === 0 ? `Opened http://127.0.0.1:${port}` : `Open this URL in your browser:\n${url}`);
+  return (await Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" }).exited.catch(() => 1)) === 0;
 }
 
 async function sessions(limit: number) {
