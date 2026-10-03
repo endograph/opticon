@@ -16,14 +16,15 @@ export async function update(requested?: string): Promise<void> {
   const asset = assetName();
   const base = `https://github.com/${REPO}/releases/download/v${version}`;
   console.log(`Updating opticon ${VERSION} -> ${version}...`);
-  const [binary, sums] = await Promise.all([download(`${base}/${asset}`), download(`${base}/SHA256SUMS`)]);
+  const [gzipped, sums] = await Promise.all([download(`${base}/${asset}`), download(`${base}/SHA256SUMS`)]);
   const expected = new TextDecoder()
     .decode(sums)
     .split("\n")
     .map((line) => line.trim().split(/\s+/))
     .find(([, name]) => name === asset)?.[0];
   if (!expected) throw new Error(`No checksum for ${asset} in release v${version}.`);
-  if (createHash("sha256").update(binary).digest("hex") !== expected) throw new Error(`Checksum mismatch for ${asset}.`);
+  if (createHash("sha256").update(gzipped).digest("hex") !== expected) throw new Error(`Checksum mismatch for ${asset}.`);
+  const binary = Bun.gunzipSync(gzipped);
 
   // Write next to the current binary, then rename over it so the swap is atomic.
   const target = process.execPath;
@@ -59,10 +60,10 @@ function assetName(): string {
   const os = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : undefined;
   const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : undefined;
   if (!os || !arch) throw new Error(`No release build for ${process.platform}-${process.arch}.`);
-  return `opticon-${os}-${arch}`;
+  return `opticon-${os}-${arch}.gz`;
 }
 
-async function download(url: string): Promise<Uint8Array> {
+async function download(url: string): Promise<Uint8Array<ArrayBuffer>> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}): ${url}`);
   return new Uint8Array(await res.arrayBuffer());

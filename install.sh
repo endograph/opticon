@@ -18,6 +18,7 @@ fail() {
 }
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
+command -v gunzip >/dev/null 2>&1 || fail "gunzip is required"
 
 case "$(uname -s)" in
   Darwin) os=darwin ;;
@@ -36,7 +37,7 @@ if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_transla
   arch=arm64
 fi
 
-asset="opticon-$os-$arch"
+asset="opticon-$os-$arch.gz"
 if [ -n "${OPTICON_VERSION:-}" ]; then
   base="https://github.com/$REPO/releases/download/v${OPTICON_VERSION#v}"
 else
@@ -59,9 +60,10 @@ else
 fi
 [ "$actual" = "$expected" ] || fail "checksum mismatch for $asset"
 
+gunzip -c "$tmp/$asset" >"$tmp/opticon" || fail "couldn't decompress $asset"
+chmod 755 "$tmp/opticon"
 mkdir -p "$INSTALL_DIR"
-chmod 755 "$tmp/$asset"
-mv "$tmp/$asset" "$INSTALL_DIR/opticon"
+mv "$tmp/opticon" "$INSTALL_DIR/opticon"
 version="$("$INSTALL_DIR/opticon" version)" || fail "installed binary failed to run"
 echo "Installed opticon $version to $INSTALL_DIR/opticon"
 

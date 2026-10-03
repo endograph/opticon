@@ -1,7 +1,9 @@
-// Builds release binaries for every supported platform into dist/release, plus SHA256SUMS.
+// Builds release binaries for every supported platform into dist/release, each also gzipped
+// (what install.sh and `opticon update` download), plus SHA256SUMS covering every file.
 // Usage: bun scripts/build-release.ts <version>   (e.g. 0.1.0, without the leading "v")
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 
 const TARGETS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"];
@@ -36,8 +38,15 @@ for (const target of TARGETS) {
     const sign = Bun.spawnSync(["codesign", "--force", "--sign", "-", outfile], { stdout: "inherit", stderr: "inherit" });
     if (sign.exitCode !== 0) process.exit(sign.exitCode ?? 1);
   }
-  sums.push(`${createHash("sha256").update(await readFile(outfile)).digest("hex")}  ${name}`);
+  const binary = await readFile(outfile);
+  const gzipped = gzipSync(binary, { level: 9 });
+  await writeFile(`${outfile}.gz`, gzipped);
+  sums.push(`${sha256(binary)}  ${name}`, `${sha256(gzipped)}  ${name}.gz`);
 }
 
 await writeFile(join(OUT, "SHA256SUMS"), `${sums.join("\n")}\n`);
 console.log(`Built opticon ${version}:\n${sums.join("\n")}`);
+
+function sha256(data: Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
+}
