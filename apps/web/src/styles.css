@@ -1683,17 +1683,17 @@ a.project-chip:hover {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #15803d;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #15803d 18%, transparent);
+  background: #4f7a5c;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #4f7a5c 18%, transparent);
 }
 
 :root[data-theme="dark"] .place-dot {
-  background: #4ade80;
+  background: #8fb39a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .place-dot {
-    background: #4ade80;
+    background: #8fb39a;
   }
 }
 

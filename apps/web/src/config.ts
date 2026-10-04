@@ -48,7 +48,7 @@ export function applyLocalFavicon(): void {
   link.href = prefix + encodeURIComponent(svg);
 }
 
-export const LOCAL_GREEN = { light: "#15803d", dark: "#4ade80" };
+export const LOCAL_GREEN = { light: "#4f7a5c", dark: "#8fb39a" };
 
 /** The address of the local app, for links from opticon.tv. */
 export const LOCAL_APP_URL = "http://127.0.0.1:4317";
