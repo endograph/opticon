@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { type SessionEvent, type SessionMeta, projectSessionForShare } from "@opticon/core";
 import { matches, normalizeRemote } from "../src/autosync";
 import { ShareSync } from "../src/daemon/sync";
+
+const INSTANCE = { name: "example.test", convexUrl: "https://example.convex.cloud", siteUrl: "https://example.convex.site", webUrl: "https://example.test" };
 import type { SessionMessage, SessionStore } from "../src/daemon/store";
 
 test("share creation and live uploads send the scrubbed preview, including title-only updates", async () => {
@@ -24,7 +26,7 @@ test("share creation and live uploads send the scrubbed preview, including title
   } as unknown as SessionStore;
   const created: Record<string, unknown>[] = [];
   const uploaded: Record<string, unknown>[] = [];
-  const sync = new ShareSync(store);
+  const sync = new ShareSync(store, INSTANCE);
   // Substitute only the network client and login; exercise the real projection, queue, and diff.
   const internals = sync as unknown as {
     client: unknown;
@@ -42,7 +44,7 @@ test("share creation and live uploads send the scrubbed preview, including title
     },
   };
   internals.auth = { token: "test-owner-token" };
-  sync.account = { configured: true, signedIn: true, liveSync: true, webUrl: "https://example.test" };
+  sync.account = { ...sync.account, signedIn: true, webUrl: "https://example.test" };
 
   const preview = projectSessionForShare({ meta, events });
   await sync.share("claude/session-id", { link: true, users: [], orgs: [], teams: [], repo: false });
@@ -71,7 +73,7 @@ test("autosync creates shares with the rule's access, refreshes existing ones, a
   const events: SessionEvent[] = [{ kind: "message", id: "m", role: "user", text: "hello" }];
   const store = { get: () => meta, events: async () => ({ meta, events }) } as unknown as SessionStore;
   const calls: { kind: string; args: Record<string, unknown> }[] = [];
-  const sync = new ShareSync(store);
+  const sync = new ShareSync(store, INSTANCE);
   const internals = sync as unknown as { client: unknown; auth: unknown; deleted: Set<string>; autosync(key: string): Promise<void> };
   internals.client = {
     action: async (_fn: unknown, args: Record<string, unknown>) => {
@@ -81,7 +83,7 @@ test("autosync creates shares with the rule's access, refreshes existing ones, a
     mutation: async (_fn: unknown, args: Record<string, unknown>) => void calls.push({ kind: "append", args }),
   };
   internals.auth = { token: "t" };
-  sync.account = { configured: true, signedIn: true, liveSync: true };
+  sync.account = { ...sync.account, signedIn: true };
   const access = { link: false, users: [], orgs: ["acme"], teams: [], repo: false };
   sync.rules = [{ instance: "x", path: "/work/proj", sync: true, share: access, listed: true, since: "2026-01-01T00:00:00.000Z" }];
 

@@ -66,17 +66,17 @@ export async function writeRules(rules: AutosyncRule[]): Promise<void> {
 
 type RuleTarget = Pick<AutosyncRule, "instance" | "repo" | "path">;
 
-/** What a rule for `dir` on the selected instance matches: its remote when it has one, else its path. */
-export async function ruleTarget(dir: string): Promise<RuleTarget> {
+/** What a rule for `dir` on a server (by default the selected one) matches: its remote when it has one, else its path. */
+export async function ruleTarget(dir: string, instance = endpoints().convexUrl): Promise<RuleTarget> {
   // Session cwds are real paths (e.g. /private/tmp on macOS, not /tmp).
   const path = await realpath(resolve(dir)).catch(() => resolve(dir));
   const repo = await repoOf(path);
-  return { instance: endpoints().convexUrl, ...(repo ? { repo } : { path }) };
+  return { instance, ...(repo ? { repo } : { path }) };
 }
 
 /** A listed rule for `dir` that shares with `access`. */
-export async function newRule(dir: string, access: ShareAccess): Promise<AutosyncRule> {
-  return { ...(await ruleTarget(dir)), sync: true, share: access, listed: true, since: new Date().toISOString() };
+export async function newRule(dir: string, access: ShareAccess, instance = endpoints().convexUrl): Promise<AutosyncRule> {
+  return { ...(await ruleTarget(dir, instance)), sync: true, share: access, listed: true, since: new Date().toISOString() };
 }
 
 /** Adds or replaces the rule for the same instance and repo or path. */

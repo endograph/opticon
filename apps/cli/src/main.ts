@@ -182,8 +182,8 @@ async function liveSync(value: string | undefined) {
 }
 
 /**
- * Instances live in ~/.opticon/instances.json. The daemon watches it: selecting another instance
- * reconnects it there and switches to that instance's autosync rules.
+ * Instances live in ~/.opticon/instances.json. The daemon syncs with all of them; the selection
+ * only decides which one commands and the local app act on.
  */
 async function instance() {
   const [sub, name] = args;

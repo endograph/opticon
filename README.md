@@ -56,7 +56,7 @@ The backend is a Convex app in `apps/server`. These deployment environment varia
 - `OPTICON_ANONYMOUS=0`: signed-out visitors can't open anything, including link shares, and there are no badges.
 - `OPTICON_SHARE_GRANTS=repo,people`: which kinds of access shares may use (`link`, `people`, `repo`). Others are refused and ignored on existing shares.
 
-Point the CLI at it with `opticon instance https://opticon.acme.dev`, then `opticon login`. Every command uses the selected instance; `opticon instance` lists them and `opticon instance opticon.tv` switches back. Sign-ins and autosync rules are kept per instance, so switching never uploads one instance's projects to another.
+Point the CLI at it with `opticon instance https://opticon.acme.dev`, then `opticon login`. Commands and the local app's Share button use the selected instance; `opticon instance` lists them and `opticon instance opticon.tv` switches back (the local app has a picker too). The daemon keeps syncing with every instance you're signed in to, whichever is selected. Sign-ins and autosync rules are kept per instance, so one instance's projects never go to another.
 
 ## Development
 

@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { isLocal, placeLabel } from "./config";
+import { config, isLocal, placeLabel } from "./config";
+import { selectInstance } from "./local/api";
 import { SignInButton, useIdentity } from "./identity";
 import { Link, type Route } from "./router";
 import { signOut } from "./session";
@@ -47,6 +48,7 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
             {isLocal() && <span className="place-dot" />}
             {placeLabel()}
           </div>
+          <InstancePicker />
           <Link href="/local" className="nav-item" aria-current={active === "local"}>
             Local sessions
           </Link>
@@ -113,6 +115,39 @@ function ThemeButton() {
         <path d="M8 1.6c2.7 3 4.4 5.2 4.4 7.1a4.4 4.4 0 0 1-8.8 0c0-1.9 1.7-4.1 4.4-7.1Z" />
       </svg>
     </button>
+  );
+}
+
+/**
+ * The local app's server: where its shares go. Choosing one selects it for this machine, as
+ * `opticon instance` does; every server keeps syncing either way. Hidden with only one server.
+ */
+function InstancePicker() {
+  const { daemon } = useIdentity();
+  const [busy, setBusy] = useState(false);
+  const instances = daemon?.instances ?? [];
+  if (!isLocal() || instances.length < 2) return null;
+  return (
+    <label className="instance-picker" title="Where shares from this app go. Every server keeps syncing.">
+      <span>Server</span>
+      <select
+        value={config.convexUrl}
+        disabled={busy}
+        onChange={(e) => {
+          const next = instances.find((i) => i.convexUrl === e.target.value);
+          if (!next) return;
+          setBusy(true);
+          // The daemon then reports the new selection and the page reloads onto it.
+          void selectInstance(next.name).catch(() => setBusy(false));
+        }}
+      >
+        {instances.map((i) => (
+          <option key={i.convexUrl} value={i.convexUrl}>
+            {i.name} · {i.login ?? "not signed in"}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

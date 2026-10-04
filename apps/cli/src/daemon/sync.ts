@@ -1,5 +1,3 @@
-import { type FSWatcher, watch } from "node:fs";
-import { basename } from "node:path";
 import {
   PRIVATE_ACCESS,
   PROTOCOL_VERSION,
@@ -12,9 +10,8 @@ import {
 import { api } from "@opticon/server/api";
 import { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
-import { AUTH_FILE, type Auth, INSTANCES_FILE, currentInstance, endpoints, readAuth } from "../account";
-import { AUTOSYNC_FILE, type AutosyncRule, currentRules, matches, repoOf } from "../autosync";
-import { OPTICON_HOME } from "../paths";
+import { type Auth, type Instance, readAuth } from "../account";
+import { type AutosyncRule, matches, readRules, repoOf } from "../autosync";
 import { type ListChange, type SessionKey, type SessionMessage, type SessionStore, keyOf } from "./store";
 
 const MAX_BATCH_EVENTS = 200;
@@ -27,9 +24,9 @@ type Demand = FunctionReturnType<typeof api.shares.liveDemand>;
 
 export interface AccountState {
   configured: boolean;
-  /** The selected instance's name and backend. The local app reloads when the backend changes. */
-  instance?: string;
-  convexUrl?: string;
+  /** The server this state is for. */
+  instance: string;
+  convexUrl: string;
   signedIn: boolean;
   login?: string;
   liveSync: boolean;
@@ -39,7 +36,8 @@ export interface AccountState {
 }
 
 /**
- * Bridges local sessions and the sharing backend. Shares are uploaded in full when created.
+ * Bridges local sessions and one server's sharing backend; the daemon runs one per known server
+ * (see Syncs), so every server keeps syncing whichever one is selected. Shares are uploaded in full when created.
  * After that, a session is streamed only while the server reports live demand (a connected
  * viewer, with live sync on). Uploads are diffed against what this daemon already sent.
  *
@@ -56,7 +54,6 @@ export class ShareSync {
   private uploaded = new Map<string, Map<string, string>>();
   private queues = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
-  private authWatcher?: FSWatcher;
   private offList?: () => void;
   /** Sessions whose share was deleted, from the server. */
   private deleted = new Set<SessionKey>();
@@ -68,26 +65,22 @@ export class ShareSync {
   private claimQueue: Promise<void> = Promise.resolve();
   rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
-  account: AccountState = { configured: true, signedIn: false, liveSync: true, webUrl: endpoints().webUrl };
+  account: AccountState;
 
-  constructor(private readonly store: SessionStore) {}
+  constructor(
+    private readonly store: SessionStore,
+    readonly instance: Instance,
+  ) {
+    this.account = this.signedOut();
+  }
 
   async start(): Promise<void> {
-    this.rules = await currentRules();
+    this.rules = await this.readRules();
     await this.connect();
-    // `opticon login` / `logout` rewrite auth.json; reconnect when that happens.
-    // `opticon autosync` edits autosync.json; pick up the new rules.
-    // `opticon instance` selects another server: reconnect, and switch to its rules.
-    this.authWatcher = watch(OPTICON_HOME, (_event, name) => {
-      if (name === basename(AUTH_FILE)) void this.connect();
-      if (name === basename(AUTOSYNC_FILE)) void this.reloadRules();
-      if (name === basename(INSTANCES_FILE)) void this.reloadRules().then(() => this.connect());
-    });
     this.offList = this.store.onList((change) => this.onSessions(change));
   }
 
   stop(): void {
-    this.authWatcher?.close();
     this.offList?.();
     for (const timer of this.autoTimers.values()) clearTimeout(timer);
     this.autoTimers.clear();
@@ -186,16 +179,29 @@ export class ShareSync {
 
   // --- connection -----------------------------------------------------------
 
+  private signedOut(): AccountState {
+    const { name, convexUrl, webUrl } = this.instance;
+    return { configured: true, instance: name, convexUrl, signedIn: false, liveSync: true, webUrl };
+  }
+
+  /** This server's CLI token, for the local app to talk to its backend directly. */
+  token(): string | undefined {
+    return this.auth?.token;
+  }
+
+  /** Reconnects if this server's sign-in changed (auth.json holds every server's). */
+  async refreshAuth(): Promise<void> {
+    const auth = await readAuth(this.instance.convexUrl);
+    if (auth?.token !== this.auth?.token) await this.connect();
+  }
+
   private async connect(): Promise<void> {
     this.disconnect();
-    const ep = endpoints();
-    this.auth = await readAuth();
-    this.account = {
-      configured: true, instance: currentInstance().name, convexUrl: ep.convexUrl, signedIn: false, liveSync: true, webUrl: ep.webUrl,
-    };
+    this.auth = await readAuth(this.instance.convexUrl);
+    this.account = this.signedOut();
     if (!this.auth) return this.emit();
     const { token } = this.auth;
-    const client = new ConvexClient(ep.convexUrl);
+    const client = new ConvexClient(this.instance.convexUrl);
     this.client = client;
     const onError = (error: Error) => {
       this.account = { ...this.account, signedIn: false, error: error.message };
@@ -257,8 +263,12 @@ export class ShareSync {
   // --- autosync -------------------------------------------------------------
 
   async reloadRules(): Promise<void> {
-    this.rules = await currentRules();
+    this.rules = await this.readRules();
     this.emit();
+  }
+
+  private async readRules(): Promise<AutosyncRule[]> {
+    return (await readRules()).filter((r) => r.instance === this.instance.convexUrl);
   }
 
   /** The rule covering `cwd`, if any. */

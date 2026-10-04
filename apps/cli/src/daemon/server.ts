@@ -2,11 +2,12 @@ import { hostname } from "node:os";
 import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectSessionForShare } from "@opticon/core";
 import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
-import { defaultAccess, endpoints, readAuth } from "../account";
+import { defaultAccess, endpoints, selectInstance } from "../account";
 import { addRule, describeRule, newRule, removeRule, ruleTarget } from "../autosync";
 import { type SessionKey, SessionStore } from "./store";
 import { tailnetHostname } from "../tailscale";
-import { ShareSync } from "./sync";
+import type { ShareSync } from "./sync";
+import { Syncs } from "./syncs";
 
 const COOKIE = "opticon_local";
 
@@ -23,8 +24,8 @@ export interface DaemonOptions {
 export async function startServer(options: DaemonOptions) {
   const store = new SessionStore();
   await store.start();
-  const sync = new ShareSync(store);
-  await sync.start();
+  const syncs = new Syncs(store);
+  await syncs.start();
   const allowedHosts = new Set([`127.0.0.1:${options.port}`, `localhost:${options.port}`]);
   // `opticon web --tailscale` proxies through `tailscale serve`, which keeps the Host header.
   // This machine's MagicDNS name is controlled by Tailscale, not by an attacker, so allowing it
@@ -47,10 +48,19 @@ export async function startServer(options: DaemonOptions) {
     };
 
   const failure = (error: unknown) => Response.json({ error: (error as Error).message }, { status: 400 });
-  const shareState = () => ({
+  /**
+   * The server a request is about: the local app sends the backend it's showing, so a page
+   * still open on one server never acts on another. Without one, the selected server.
+   */
+  const syncFor = (req: Request): ShareSync =>
+    syncs.for(req.headers.get("x-opticon-backend") ?? new URL(req.url).searchParams.get("backend"));
+  const shareState = (sync: ShareSync) => ({
     type: "shares",
     account: sync.account,
     shares: sync.shares.map((s) => ({ ...s, url: sync.urlFor(s.slug) })),
+    /** The selected server; the local app reloads onto it when it changes. */
+    selected: endpoints().convexUrl,
+    instances: syncs.all().map((s) => ({ name: s.instance.name, convexUrl: s.instance.convexUrl, login: s.account.login })),
   });
 
   const sessionKey = (req: Bun.BunRequest<"/api/sessions/:provider/:id">) =>
@@ -84,7 +94,14 @@ export async function startServer(options: DaemonOptions) {
        * My shares). It grants nothing the local API doesn't already: that API can create and
        * delete shares with the same token.
        */
-      "/api/convex-token": guard(async () => Response.json({ token: (await readAuth())?.token ?? null })),
+      "/api/convex-token": guard((req) => Response.json({ token: syncFor(req).token() ?? null })),
+
+      /** Selects another server, as `opticon instance <name>` does. */
+      "/api/instance": guard(async (req) => {
+        if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+        const { name } = (await req.json()) as { name: string };
+        return selectInstance(name).then(() => Response.json({ ok: true }), failure);
+      }),
 
       "/api/health": () => Response.json({ protocol: PROTOCOL_VERSION, version: options.version, pid: process.pid }),
 
@@ -104,9 +121,10 @@ export async function startServer(options: DaemonOptions) {
       "/api/sessions/stream": guard((req) =>
         sse(req.signal, (send) => {
           send({ type: "list", sessions: store.list() });
-          send(shareState());
+          const sync = syncFor(req);
+          send(shareState(sync));
           const offList = store.onList((change) => send({ type: "change", ...change }));
-          const offShares = sync.onChange(() => send(shareState()));
+          const offShares = syncs.onChange(() => send(shareState(sync)));
           return () => {
             offList();
             offShares();
@@ -137,7 +155,7 @@ export async function startServer(options: DaemonOptions) {
         if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
         const { access, listed } = (await req.json()) as { access: ShareAccess; listed?: boolean };
         // The dialog's checkbox is the source of truth, so an explicit false unlists an existing share.
-        return sync
+        return syncFor(req)
           .share(sessionKey(req), normalizeAccess(access), { listed: !!listed })
           .then((r) => Response.json(r), failure);
       }),
@@ -145,13 +163,13 @@ export async function startServer(options: DaemonOptions) {
       /** DELETE deletes the server copy; autosync won't bring it back. */
       "/api/shares/:shareId": guard(async (req) => {
         if (req.method !== "DELETE") return new Response("Method not allowed", { status: 405 });
-        return sync.delete(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
+        return syncFor(req).delete(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
       }),
 
       /** Makes the share private; the copy stays and keeps syncing. */
       "/api/shares/:shareId/unshare": guard(async (req) => {
         if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
-        return sync.unshare(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
+        return syncFor(req).unshare(String(req.params.shareId)).then(() => Response.json({ ok: true }), failure);
       }),
 
       /**
@@ -161,21 +179,23 @@ export async function startServer(options: DaemonOptions) {
       "/api/sessions/:provider/:id/autosync": guard(async (req) => {
         const cwd = store.get(sessionKey(req))?.cwd;
         if (!cwd) return Response.json({ error: "This session has no working directory" }, { status: 404 });
+        const sync = syncFor(req);
+        const instance = sync.instance.convexUrl;
         if (req.method === "POST") {
-          await addRule(await newRule(cwd, await defaultAccess()));
+          await addRule(await newRule(cwd, await defaultAccess(instance), instance));
         } else if (req.method === "DELETE") {
           const rule = await sync.ruleFor(cwd);
           if (rule) await removeRule(rule);
         }
         if (req.method !== "GET") await sync.reloadRules();
-        const [rule, target] = await Promise.all([sync.ruleFor(cwd), ruleTarget(cwd)]);
+        const [rule, target] = await Promise.all([sync.ruleFor(cwd), ruleTarget(cwd, instance)]);
         return Response.json({ rule: rule ?? null, target: describeRule(target) });
       }),
 
       /** The session's GitHub repo as `owner/name`, from its origin remote, or null. */
       "/api/sessions/:provider/:id/repo": guard(async (req) => {
         const cwd = store.get(sessionKey(req))?.cwd;
-        const remote = cwd ? await sync.repoFor(cwd) : undefined;
+        const remote = cwd ? await syncFor(req).repoFor(cwd) : undefined;
         return Response.json({ repo: remote?.startsWith("github.com/") ? remote.slice("github.com/".length) : null });
       }),
 
@@ -187,7 +207,7 @@ export async function startServer(options: DaemonOptions) {
     },
   });
 
-  return { server, store, sync };
+  return { server, store, syncs };
 }
 
 /** Server-sent events with heartbeats. `subscribe` returns its cleanup. */

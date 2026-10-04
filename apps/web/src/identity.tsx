@@ -2,7 +2,7 @@ import { api } from "@opticon/server/api";
 import { useQuery } from "convex/react";
 import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { config, isLocal } from "./config";
-import { type Daemon, useDaemonState } from "./local/api";
+import { type Daemon, localFetch, useDaemonState } from "./local/api";
 import { type SessionUser, cacheUser, getSession, getSessionUser, signIn, signOut, useSessionToken } from "./session";
 
 /**
@@ -55,7 +55,7 @@ function LocalIdentity({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!login) return setSession(undefined);
     let cancelled = false;
-    void fetch("/api/convex-token")
+    void localFetch("/api/convex-token")
       .then((r) => (r.ok ? (r.json() as Promise<{ token: string | null }>) : { token: null }))
       .then(({ token }) => !cancelled && setSession({ login, token: token ?? undefined }));
     return () => {

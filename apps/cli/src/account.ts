@@ -132,9 +132,14 @@ async function discoverInstance(target: string): Promise<Instance> {
   return { name: new URL(webUrl).host, convexUrl: config.convexUrl, siteUrl: config.siteUrl, webUrl };
 }
 
-/** The access new shares and autosync rules start with on this instance. */
-export async function defaultAccess(): Promise<ShareAccess> {
-  return (await new ConvexHttpClient(endpoints().convexUrl).query(api.instance.policy, {})).defaultAccess;
+/** The access new shares and autosync rules start with on a server, by default the selected one. */
+export async function defaultAccess(convexUrl = endpoints().convexUrl): Promise<ShareAccess> {
+  return (await new ConvexHttpClient(convexUrl).query(api.instance.policy, {})).defaultAccess;
+}
+
+/** The servers the daemon syncs with: every known instance, or only the one env vars point at. */
+export function syncedInstances(): Instance[] {
+  return instanceOverridden() ? [{ ...currentInstance(), ...endpoints() }] : instances();
 }
 
 export interface Auth {

@@ -8,9 +8,9 @@ export const sessionKey = (m: Pick<SessionMeta, "provider" | "id">) => `${m.prov
 
 export interface Account {
   configured: boolean;
-  /** The selected instance (`opticon instance`) and its backend. */
-  instance?: string;
-  convexUrl?: string;
+  /** The server this page shows (the selected one when it loaded) and its backend. */
+  instance: string;
+  convexUrl: string;
   signedIn: boolean;
   login?: string;
   liveSync: boolean;
@@ -47,28 +47,51 @@ export interface AutosyncState {
 type ListMessage =
   | { type: "list"; sessions: SessionMeta[] }
   | { type: "change"; upserted: SessionMeta[]; removed: string[] }
-  | { type: "shares"; account: Account; shares: MyShare[] };
+  | { type: "shares"; account: Account; shares: MyShare[]; selected: string; instances: InstanceSummary[] };
+
+/** A server the daemon syncs with, and who this machine is signed in to it as. */
+export interface InstanceSummary {
+  name: string;
+  convexUrl: string;
+  login?: string;
+}
 
 export interface Daemon {
   sessions: SessionMeta[];
   status: Status;
   account?: Account;
   shares: MyShare[];
+  instances: InstanceSummary[];
 }
+
+/**
+ * Tells the daemon which server a request is about: the one this page loaded with. A page left
+ * open across `opticon instance` never acts on another server.
+ */
+const BACKEND_HEADER = "x-opticon-backend";
+export const localFetch = (url: string, init: RequestInit = {}) =>
+  fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), [BACKEND_HEADER]: config.convexUrl } });
+
+/** Selects another server for this machine, as `opticon instance <name>` does. The page then reloads onto it. */
+export const selectInstance = (name: string) => send("POST", "/api/instance", { name });
 
 /** Live list of local sessions (newest first), plus sharing state from the daemon. One per app. */
 export function useDaemonState(): Daemon {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [status, setStatus] = useState<Status>("loading");
-  const [sharing, setSharing] = useState<{ account?: Account; shares: MyShare[] }>({ shares: [] });
+  const [sharing, setSharing] = useState<{ account?: Account; shares: MyShare[]; instances: InstanceSummary[] }>({
+    shares: [],
+    instances: [],
+  });
 
   useEffect(() => {
-    return subscribe<ListMessage>("/api/sessions/stream", "/api/sessions", setStatus, (message) => {
+    const stream = `/api/sessions/stream?backend=${encodeURIComponent(config.convexUrl)}`;
+    return subscribe<ListMessage>(stream, "/api/sessions", setStatus, (message) => {
       if (message.type === "list") return setSessions(message.sessions);
       if (message.type === "shares") {
-        // `opticon instance` switched servers; this page's Convex client points at the old one.
-        if (message.account.convexUrl && message.account.convexUrl !== config.convexUrl) return location.reload();
-        return setSharing({ account: message.account, shares: message.shares });
+        // Another server was selected; this page's Convex client points at the old one.
+        if (message.selected !== config.convexUrl) return location.reload();
+        return setSharing({ account: message.account, shares: message.shares, instances: message.instances });
       }
       setSessions((current) => {
         const byKey = new Map(current.map((s) => [sessionKey(s), s]));
@@ -117,7 +140,7 @@ export function useSessionRepo(key: string | undefined): string | null {
   useEffect(() => {
     if (!key) return;
     let cancelled = false;
-    fetch(`/api/sessions/${key}/repo`)
+    localFetch(`/api/sessions/${key}/repo`)
       .then((res) => (res.ok ? res.json() : { repo: null }))
       .then((data: { repo: string | null }) => !cancelled && setRepo({ key, repo: data.repo }))
       .catch(() => {});
@@ -145,7 +168,7 @@ export const deleteShare = (shareId: string) => send("DELETE", `/api/shares/${sh
 export const unshare = (shareId: string) => send("POST", `/api/shares/${shareId}/unshare`);
 
 export async function fetchAutosync(key: string): Promise<AutosyncState> {
-  const res = await fetch(`/api/sessions/${key}/autosync`);
+  const res = await localFetch(`/api/sessions/${key}/autosync`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
   return data as AutosyncState;
@@ -155,7 +178,7 @@ export const enableAutosync = (key: string) => send<AutosyncState>("POST", `/api
 export const disableAutosync = (key: string) => send<AutosyncState>("DELETE", `/api/sessions/${key}/autosync`);
 
 async function send<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await localFetch(url, {
     method,
     headers: { "content-type": "application/json", "x-opticon": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),

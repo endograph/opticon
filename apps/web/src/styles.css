@@ -1687,6 +1687,26 @@ a.project-chip:hover {
   box-shadow: 0 0 0 3px color-mix(in srgb, #4f7a5c 18%, transparent);
 }
 
+.instance-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 10px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.instance-picker select {
+  min-width: 0;
+  flex: 1;
+  font: inherit;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+
 :root[data-theme="dark"] .place-dot {
   background: #8fb39a;
 }

@@ -46,12 +46,12 @@ export async function runDaemon(port = DEFAULT_PORT): Promise<void> {
     console.error(`Port ${port} is in use by another program. Set OPTICON_PORT to use a different port.`);
     process.exit(1);
   });
-  const { server, store, sync } = started;
+  const { server, store, syncs } = started;
   await Bun.write(DAEMON_FILE, JSON.stringify({ pid: process.pid, port, protocol: PROTOCOL_VERSION } satisfies DaemonInfo));
   console.log(`opticon daemon ${BUILD} listening on ${server.url}`);
   const shutdown = async () => {
     store.stop();
-    sync.stop();
+    syncs.stop();
     server.stop(true);
     const info = await readInfo();
     if (info?.pid === process.pid) await rm(DAEMON_FILE, { force: true });
