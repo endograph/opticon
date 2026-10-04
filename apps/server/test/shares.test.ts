@@ -594,6 +594,8 @@ describe("repo pages", () => {
       await share(t, owner, "s2", "github.com/new/name");
       expect(calls).toEqual(["old/name"]);
     });
+    // Shares are ordered by update time; on a fast machine s2's creation and the re-share can share a millisecond.
+    await Bun.sleep(2);
     await withRepos({ "other/repo": 502 }, async () => {
       // Re-sharing during an outage keeps the existing link (and bumps the share to the top).
       await share(t, owner, "s1", "github.com/other/repo");
