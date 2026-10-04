@@ -164,4 +164,5 @@ export default defineSchema({
     .index("by_user_share", ["userId", "shareId"])
     .index("by_user_following", ["userId", "following", "lastViewedAt"])
     .index("by_share", ["shareId"]),
-});
+// Off only while migrations.shareAccessV2 rewrites shares into the next schema.
+}, { schemaValidation: false });

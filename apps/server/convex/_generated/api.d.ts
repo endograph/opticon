@@ -15,6 +15,7 @@ import type * as crons from "../crons.js";
 import type * as follows from "../follows.js";
 import type * as http from "../http.js";
 import type * as lib from "../lib.js";
+import type * as migrations from "../migrations.js";
 import type * as presence from "../presence.js";
 import type * as repos from "../repos.js";
 import type * as shares from "../shares.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   follows: typeof follows;
   http: typeof http;
   lib: typeof lib;
+  migrations: typeof migrations;
   presence: typeof presence;
   repos: typeof repos;
   shares: typeof shares;
