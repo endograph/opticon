@@ -1,6 +1,19 @@
-[Website](https://opticon.tv) [![Opticon sessions](https://opticon.tv/badge/gh/endograph/opticon.svg)](https://opticon.tv/gh/endograph/opticon)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/endograph/opticon/main/favicon.svg" alt="opticon" width="120" />
+</p>
+
+<p align="center">
+  <a href="https://opticon.tv">Website</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#sharing">Sharing</a> ·
+  <a href="https://github.com/endograph/opticon/releases">Releases</a>
+</p>
 
 # opticon
+
+[![Opticon sessions](https://opticon.tv/badge/gh/endograph/opticon.svg)](https://opticon.tv/gh/endograph/opticon)
+[![release](https://img.shields.io/github/v/release/endograph/opticon)](https://github.com/endograph/opticon/releases)
+[![license](https://img.shields.io/github/license/endograph/opticon)](LICENSE)
 
 Browse and share your Claude Code and Codex sessions.
 
