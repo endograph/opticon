@@ -14,8 +14,13 @@ export function Home() {
   return (
     <div className="page home">
       <section className="hero">
-        <Mark className="hero-mark" size={120} />
-        <h1>Opticon</h1>
+        <Mark className="hero-mark" size={128} />
+        <h1>
+          <span className="hero-cutout" aria-hidden="true">
+            Opticon
+          </span>
+          Opticon
+        </h1>
         <p className="lede">Share your agent sessions</p>
         <div className="hero-actions">
           {!isLocal() && (

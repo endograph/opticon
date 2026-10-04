@@ -1146,19 +1146,29 @@ a.owner:hover {
 .hero-mark {
   display: block;
   color: var(--text);
-  margin: 0 auto -12px;
+  margin: 0 auto -20px;
   transform: scaleY(-1);
 }
 
 .page.home .hero h1 {
   position: relative;
+  isolation: isolate;
+  width: max-content;
   font-size: 36px;
   letter-spacing: -0.025em;
-  margin: 0;
+  margin: 0 auto;
   font-weight: 750;
-  /* Knock out the icon around the letter tops, then paint the letters at their full weight. */
-  -webkit-text-stroke: 14px var(--bg);
-  paint-order: stroke fill;
+}
+
+/* Give every letter the same clearance while preserving the word's full weight. */
+.hero-cutout {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  color: var(--bg);
+  -webkit-text-stroke: 20px var(--bg);
+  pointer-events: none;
+  user-select: none;
 }
 
 .lede {
