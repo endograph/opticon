@@ -45,7 +45,7 @@ test("share creation and live uploads send the scrubbed preview, including title
   sync.account = { configured: true, signedIn: true, liveSync: true, webUrl: "https://example.test" };
 
   const preview = projectSessionForShare({ meta, events });
-  await sync.share("claude/session-id", { anyone: true, users: [], orgs: [], teams: [] });
+  await sync.share("claude/session-id", { link: true, users: [], orgs: [], teams: [], repo: false });
   expect(created[0]).toMatchObject({ title: preview.meta.title, project: preview.meta.project });
   expect(uploaded[0]).toMatchObject({ title: preview.meta.title, events: preview.events });
   expect(JSON.stringify({ created, uploaded })).not.toMatch(/initial-password|project-secret|message-secret|tool-secret|raw-input|raw-output|raw-thinking/);
@@ -82,12 +82,12 @@ test("autosync creates shares with the rule's access, refreshes existing ones, a
   };
   internals.auth = { token: "t" };
   sync.account = { configured: true, signedIn: true, liveSync: true };
-  const access = { anyone: false, users: [], orgs: ["acme"], teams: [] };
-  sync.rules = [{ path: "/work/proj", sync: true, share: access, discoverable: true, since: "2026-01-01T00:00:00.000Z" }];
+  const access = { link: false, users: [], orgs: ["acme"], teams: [], repo: false };
+  sync.rules = [{ path: "/work/proj", sync: true, share: access, listed: true, since: "2026-01-01T00:00:00.000Z" }];
 
   await internals.autosync("claude/auto");
   expect(calls.map((c) => c.kind)).toEqual(["create", "append"]);
-  expect(calls[0]!.args).toMatchObject({ access, auto: true, discoverable: true, sessionId: "auto" });
+  expect(calls[0]!.args).toMatchObject({ access, auto: true, listed: true, sessionId: "auto" });
 
   // Once the share exists, only changed events are uploaded.
   sync.shares = [{ shareId: "auto-share", provider: "claude", sessionId: "auto" } as never];

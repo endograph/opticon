@@ -1,7 +1,9 @@
 import { httpRouter } from "convex/server";
 import { api, internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
+import { allowedOrgMembership } from "./access";
 import { issueToken } from "./auth";
+import { instancePolicy } from "./instance";
 import { sessionsBadge } from "./badge";
 import { randomToken, sha256 } from "./lib";
 
@@ -11,6 +13,8 @@ import { randomToken, sha256 } from "./lib";
  *   GITHUB_CLIENT_ID       GitHub OAuth app
  *   GITHUB_CLIENT_SECRET
  *   OPTICON_DEV_AUTH=1     enables /auth/dev, which signs in as any login without GitHub. Never set in production.
+ *
+ * Instance limits (OPTICON_ALLOWED_ORGS and friends) are described in instance.ts.
  */
 const http = httpRouter();
 
@@ -85,6 +89,15 @@ http.route({
     });
     if (!profile.ok) return new Response("Could not read GitHub profile.", { status: 502 });
     const gh = (await profile.json()) as { id: number; login: string; name?: string; avatar_url?: string };
+    const { allowedOrgs } = instancePolicy();
+    let memberOf: string | undefined;
+    if (allowedOrgs.length) {
+      const headers = { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" };
+      const org = await allowedOrgMembership(headers, allowedOrgs).catch(() => undefined);
+      if (org === undefined) return new Response("Could not check your GitHub org membership. Try again shortly.", { status: 502 });
+      if (!org) return new Response(`This Opticon is limited to members of ${allowedOrgs.join(", ")}.`, { status: 403 });
+      memberOf = org;
+    }
     const userId = await ctx.runMutation(internal.auth.upsertUser, {
       githubId: gh.id,
       login: gh.login,
@@ -94,6 +107,7 @@ http.route({
       githubTokenExpiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
       githubRefreshToken: refreshToken,
       githubRefreshTokenExpiresAt: refreshExpiresIn ? Date.now() + refreshExpiresIn * 1000 : undefined,
+      memberOf,
     });
     return withSession(redirect, await issueToken(ctx, userId, "web"));
   }),
@@ -108,7 +122,9 @@ http.route({
     const login = (params.get("login") ?? "dev").toLowerCase();
     // Fake, negative GitHub ids can never collide with real accounts.
     const githubId = -Number.parseInt((await sha256(login)).slice(0, 12), 16);
-    const userId = await ctx.runMutation(internal.auth.upsertUser, { githubId, login, name: `${login} (dev)` });
+    // Dev users count as members of the first allowed org, if the instance is limited to some.
+    const memberOf = instancePolicy().allowedOrgs[0];
+    const userId = await ctx.runMutation(internal.auth.upsertUser, { githubId, login, name: `${login} (dev)`, memberOf });
     return withSession(safeRedirect(params.get("redirect")), await issueToken(ctx, userId, "web"));
   }),
 });
@@ -154,7 +170,8 @@ http.route({
   method: "GET",
   handler: httpAction(async (ctx, req) => {
     const repo = /^\/badge\/gh\/([\w.-]+\/[\w.-]+?)(?:\.svg)?$/.exec(new URL(req.url).pathname)?.[1];
-    if (!repo) return new Response("Not found", { status: 404 });
+    // Badges are public by nature; an instance closed to signed-out visitors has none.
+    if (!repo || !instancePolicy().anonymous) return new Response("Not found", { status: 404 });
     const { count, capped } = await ctx.runQuery(api.shares.repoSessionCount, { repo });
     return new Response(sessionsBadge(count, capped), {
       headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=600" },

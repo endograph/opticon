@@ -112,7 +112,7 @@ function InstallDialog({ onClose }: { onClose: () => void }) {
             Sharing uploads a copy with message text and tool names. Thinking and tool output stay local, and
             credentials are redacted. You see exactly what will be uploaded first.
           </li>
-          <li>Choose who can open it: anyone with the link, or specific GitHub users, orgs or teams.</li>
+          <li>Choose who can open it: anyone with the link, people who can read its GitHub repo, or specific GitHub users, orgs or teams.</li>
           <li>Viewers see new messages live while they watch. Unsharing deletes the copy.</li>
         </ul>
       </div>

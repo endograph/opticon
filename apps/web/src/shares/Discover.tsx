@@ -7,9 +7,11 @@ import { Link } from "../router";
 import { ProviderIcon } from "../ProviderIcon";
 import { config, INSTALL_COMMAND, setPageTitle } from "../config";
 import { CopyCommand } from "../CopyCommand";
+import { useToken } from "../identity";
+import { useAccessRefresh } from "./refresh";
 
-type PublicShare = FunctionReturnType<typeof api.shares.feed>[number];
-type ActiveRepo = FunctionReturnType<typeof api.shares.activeRepos>[number];
+type PublicShare = FunctionReturnType<typeof api.shares.feed>["shares"][number];
+type ActiveRepo = FunctionReturnType<typeof api.shares.activeRepos>["repos"][number];
 
 const HOME_REPOS = 6;
 
@@ -22,13 +24,16 @@ export function ProjectLink({ project, repo, login }: { project?: string; repo?:
   return project ? <span>{project}</span> : null;
 }
 
-/** Recently active public sessions from everyone, for the home page. */
+/** Recently active listed sessions the viewer can open, from everyone, for the home page. */
 export function Feed() {
-  const shares = useQuery(api.shares.feed, {});
+  const token = useToken();
+  const feed = useQuery(api.shares.feed, { token });
+  useAccessRefresh(token, feed?.stale);
+  const shares = feed?.shares;
   if (!shares?.length) return null;
   return (
     <section className="feed">
-      <h2>Recent public sessions</h2>
+      <h2>Recent sessions</h2>
       <PublicShareList shares={shares} showOwner />
     </section>
   );
@@ -36,7 +41,10 @@ export function Feed() {
 
 /** The busiest repos this week, for the home page. */
 export function ActiveRepos() {
-  const repos = useQuery(api.shares.activeRepos, { limit: HOME_REPOS });
+  const token = useToken();
+  const active = useQuery(api.shares.activeRepos, { limit: HOME_REPOS, token });
+  useAccessRefresh(token, active?.stale);
+  const repos = active?.repos;
   if (!repos?.length) return null;
   return (
     <section className="feed">
@@ -48,9 +56,12 @@ export function ActiveRepos() {
   );
 }
 
-/** Every repo with public sessions this week. */
+/** Every repo with sessions this week that the viewer can open. */
 export function ReposPage() {
-  const repos = useQuery(api.shares.activeRepos, {});
+  const token = useToken();
+  const active = useQuery(api.shares.activeRepos, { token });
+  useAccessRefresh(token, active?.stale);
+  const repos = active?.repos;
   useEffect(() => {
     setPageTitle("Repos");
   }, []);
@@ -59,8 +70,8 @@ export function ReposPage() {
       <header className="page-header">
         <h1>Repos</h1>
         <p className="dim">
-          Public GitHub repos with sessions this week, shared by people who can push to them. Sessions land here when
-          you autosync or share in a repo.
+          GitHub repos with listed sessions this week, shared by people who can push to them. Sessions land here
+          when you autosync or list a share in a repo.
         </p>
       </header>
       {repos === undefined ? (
@@ -68,7 +79,7 @@ export function ReposPage() {
       ) : repos.length ? (
         <RepoList repos={repos} />
       ) : (
-        <p className="hint">No repo has public sessions this week.</p>
+        <p className="hint">No repo has sessions you can see this week.</p>
       )}
     </div>
   );
@@ -101,9 +112,11 @@ function RepoList({ repos }: { repos: ActiveRepo[] }) {
   );
 }
 
-/** A user's discoverable sessions. */
+/** A user's listed sessions that the viewer can open. */
 export function Profile({ login }: { login: string }) {
-  const profile = useQuery(api.shares.profile, { login });
+  const token = useToken();
+  const profile = useQuery(api.shares.profile, { login, token });
+  useAccessRefresh(token, profile?.stale);
   useEffect(() => {
     setPageTitle(login);
   }, [login]);
@@ -144,14 +157,16 @@ export function Profile({ login }: { login: string }) {
           ))}
         </nav>
       )}
-      {shares.length ? <PublicShareList shares={shares} /> : <p className="hint">No public sessions yet.</p>}
+      {shares.length ? <PublicShareList shares={shares} /> : <p className="hint">No listed sessions you can see.</p>}
     </div>
   );
 }
 
-/** One user's discoverable sessions in one project. */
+/** One user's listed sessions in one project that the viewer can open. */
 export function UserProject({ login, project }: { login: string; project: string }) {
-  const page = useQuery(api.shares.userProject, { login, project });
+  const token = useToken();
+  const page = useQuery(api.shares.userProject, { login, project, token });
+  useAccessRefresh(token, page?.stale);
   useEffect(() => {
     setPageTitle(`${project} · ${login}`);
   }, [login, project]);
@@ -177,14 +192,18 @@ export function UserProject({ login, project }: { login: string; project: string
           </p>
         </div>
       </header>
-      {shares.length ? <PublicShareList shares={shares} hideProject /> : <p className="hint">No public sessions in this project.</p>}
+      {shares.length ? <PublicShareList shares={shares} hideProject /> : <p className="hint">No listed sessions you can see in this project.</p>}
     </div>
   );
 }
 
-/** Discoverable sessions in a public GitHub repo, from everyone verified to push to it. */
+/** Listed sessions in a GitHub repo that the viewer can open, from everyone verified to push to it. */
 export function RepoPage({ repo }: { repo: string }) {
-  const shares = useQuery(api.shares.repoShares, { repo });
+  const token = useToken();
+  const page = useQuery(api.shares.repoShares, { repo, token });
+  useAccessRefresh(token, page?.stale);
+  const shares = page?.shares;
+  const policy = useQuery(api.instance.policy, {});
   useEffect(() => {
     setPageTitle(repo);
   }, [repo]);
@@ -199,7 +218,7 @@ export function RepoPage({ repo }: { repo: string }) {
             {repo}
           </a>
         </h1>
-        <p className="dim">Public sessions from people who can push to this repo.</p>
+        <p className="dim">Listed sessions from people who can push to this repo.</p>
         {contributors.size > 0 && (
           <div className="contributors">
             {[...contributors].map(([login, avatarUrl]) => (
@@ -218,15 +237,15 @@ export function RepoPage({ repo }: { repo: string }) {
       ) : (
         <div className="repo-empty">
           <p>
-            <strong>No public sessions yet.</strong> Contribute to {repo}? Share your Claude Code and Codex sessions
-            here: install Opticon, sign in, and autosync your clone. They show up once GitHub confirms you can push to
-            the repo.
+            <strong>No sessions you can see yet.</strong> Contribute to {repo}? Share your Claude Code and Codex
+            sessions here: install Opticon, sign in, and autosync your clone. They show up once GitHub confirms you can
+            push to the repo.
           </p>
           <CopyCommand command={INSTALL_COMMAND} />
           <CopyCommand command="opticon login && opticon autosync" />
         </div>
       )}
-      <RepoBadge repo={repo} />
+      {policy?.anonymous && <RepoBadge repo={repo} />}
     </div>
   );
 }
@@ -237,7 +256,7 @@ function RepoBadge({ repo }: { repo: string }) {
   return (
     <section className="repo-badge">
       <h2>Badge</h2>
-      <p className="dim">Link your README to this page. The badge shows how many public sessions the repo has.</p>
+      <p className="dim">Link your README to this page. The badge counts the listed sessions anyone can open.</p>
       {/* Previewed from the backend directly: only opticon.tv proxies /badge. */}
       <img src={`${config.siteUrl}/badge/gh/${repo}.svg`} alt="Opticon sessions badge" />
       <CopyCommand command={markdown} prompt={false} />

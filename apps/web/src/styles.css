@@ -1648,18 +1648,18 @@ a.project-chip:hover {
   cursor: pointer;
 }
 
-.discoverable {
+.listing {
   display: grid;
   gap: 2px;
   padding: 10px 20px 0;
 }
 
-.discoverable .hint {
+.listing .hint {
   margin: 0 0 0 22px;
   font-size: 12px;
 }
 
-.discoverable .toggle:has(input:disabled) {
+.listing .toggle:has(input:disabled) {
   color: var(--faint);
   cursor: default;
 }

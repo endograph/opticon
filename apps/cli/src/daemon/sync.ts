@@ -106,15 +106,15 @@ export class ShareSync {
   async share(
     key: SessionKey,
     access: ShareAccess,
-    options: { auto?: boolean; discoverable?: boolean } = {},
+    options: { auto?: boolean; listed?: boolean } = {},
   ): Promise<{ slug: string; url: string }> {
-    const { auto = false, discoverable } = options;
+    const { auto = false, listed } = options;
     const { client, auth } = this.requireClient();
     const session = await this.store.events(key);
     if (!session) throw new Error("Session not found");
     const { meta } = session;
     const projection = projectSessionForShare(session);
-    // The server links the share to a public GitHub repo once it confirms we can push to it.
+    // The server links the share to its GitHub repo once it confirms we can push to it.
     // Other remotes stay on this machine.
     const remote = meta.cwd ? await this.repoFor(meta.cwd) : undefined;
     const repo = remote?.startsWith("github.com/") ? remote : undefined;
@@ -129,7 +129,7 @@ export class ShareSync {
       repo,
       access,
       auto,
-      discoverable,
+      listed,
     });
     if (!auto) this.deleted.delete(key);
     await this.upload(shareId, projection);
@@ -305,7 +305,7 @@ export class ShareSync {
     if (!rule) return;
     const existing = this.shareFor(key);
     if (!existing) {
-      await this.share(key, rule.share ?? PRIVATE_ACCESS, { auto: true, discoverable: rule.discoverable });
+      await this.share(key, rule.share ?? PRIVATE_ACCESS, { auto: true, listed: rule.listed });
       return;
     }
     const session = await this.store.events(key);

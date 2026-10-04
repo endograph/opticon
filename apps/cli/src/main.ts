@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import { watch } from "node:fs";
 import {
+  PRIVATE_ACCESS,
   PROTOCOL_VERSION,
   type SessionEvent,
+  describeAccess,
   SessionTail,
   listSessionFiles,
   projectForShare,
@@ -12,8 +14,8 @@ import {
 } from "@opticon/core";
 import { api } from "@opticon/server/api";
 import { ConvexHttpClient } from "convex/browser";
-import { clearAuth, endpoints, login, readAuth } from "./account";
-import { addRule, describeRule, newRule, readRules, removeRule } from "./autosync";
+import { clearAuth, defaultAccess, endpoints, login, readAuth } from "./account";
+import { addRule, describeRule, newRule, readRules, removeRule, ruleTarget } from "./autosync";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 import { DEFAULT_TAILSCALE_PORT, serveOnTailnet, stopServing } from "./tailscale";
 import { update } from "./update";
@@ -29,7 +31,7 @@ Usage:
   opticon logout                   Sign out on this machine
   opticon whoami                   Show who you're signed in as
   opticon autosync [dir] [--yes]   Sync this project's sessions (matched by git remote, else by
-                                   directory) and make them publicly discoverable
+                                   directory) and list them with the default access
   opticon autosync off [dir]       Stop autosyncing this project
   opticon autosync list            Show autosynced projects
   opticon live-sync [on|off]       Stream shared sessions while someone is watching (default on)
@@ -165,12 +167,14 @@ async function autosync() {
     for (const r of rules) console.log(describeRule(r));
     return;
   }
-  const rule = await newRule(target);
   if (sub === "off") {
+    const rule = await ruleTarget(target);
     console.log((await removeRule(rule)) ? `Stopped autosyncing ${describeRule(rule)}.` : `${describeRule(rule)} wasn't autosyncing.`);
     return;
   }
-  const question = `This will sync all of your sessions in ${describeRule(rule)} and make them publicly discoverable.`;
+  const rule = await newRule(target, await defaultAccess());
+  const who = describeAccess(rule.share ?? PRIVATE_ACCESS).toLowerCase();
+  const question = `This will sync all of your sessions in ${describeRule(rule)} and list them for ${who}.`;
   if (!args.includes("--yes")) {
     if (!process.stdin.isTTY) {
       console.error(`${question}\nRe-run with --yes to confirm.`);
@@ -182,7 +186,7 @@ async function autosync() {
   await addRule(rule);
   const auth = await readAuth();
   console.log(`Autosyncing ${describeRule(rule)}. Sessions active from now on are uploaded as they change.`);
-  if (auth) console.log(`They'll be listed at ${endpoints()?.webUrl}/u/${auth.login}. Unshare or delete any of them from My shares.`);
+  if (auth) console.log(`They'll be listed at ${endpoints()?.webUrl}/u/${auth.login} for ${who}. Unshare or delete any of them from My shares.`);
   const repo = rule.repo?.startsWith("github.com/") ? rule.repo.slice("github.com/".length) : undefined;
   if (auth && repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints()?.webUrl}/gh/${repo}.`);
   else console.log("Not signed in yet: run `opticon login`.");

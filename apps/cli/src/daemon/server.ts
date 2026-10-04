@@ -2,8 +2,8 @@ import { hostname } from "node:os";
 import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectSessionForShare } from "@opticon/core";
 import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
-import { endpoints, readAuth } from "../account";
-import { addRule, describeRule, newRule, removeRule } from "../autosync";
+import { defaultAccess, endpoints, readAuth } from "../account";
+import { addRule, describeRule, newRule, removeRule, ruleTarget } from "../autosync";
 import { type SessionKey, SessionStore } from "./store";
 import { tailnetHostname } from "../tailscale";
 import { ShareSync } from "./sync";
@@ -135,10 +135,10 @@ export async function startServer(options: DaemonOptions) {
 
       "/api/sessions/:provider/:id/share": guard(async (req) => {
         if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
-        const { access, discoverable } = (await req.json()) as { access: ShareAccess; discoverable?: boolean };
+        const { access, listed } = (await req.json()) as { access: ShareAccess; listed?: boolean };
         // The dialog's checkbox is the source of truth, so an explicit false unlists an existing share.
         return sync
-          .share(sessionKey(req), normalizeAccess(access), { discoverable: !!discoverable && access.anyone })
+          .share(sessionKey(req), normalizeAccess(access), { listed: !!listed })
           .then((r) => Response.json(r), failure);
       }),
 
@@ -156,19 +156,19 @@ export async function startServer(options: DaemonOptions) {
 
       /**
        * Autosync for this session's project. GET reports the rule covering it, if any, and what a
-       * new rule would match; POST adds a public, discoverable one; DELETE removes it.
+       * new rule would match; POST adds a listed one with the instance's default access; DELETE removes it.
        */
       "/api/sessions/:provider/:id/autosync": guard(async (req) => {
         const cwd = store.get(sessionKey(req))?.cwd;
         if (!cwd) return Response.json({ error: "This session has no working directory" }, { status: 404 });
         if (req.method === "POST") {
-          await addRule(await newRule(cwd));
+          await addRule(await newRule(cwd, await defaultAccess()));
         } else if (req.method === "DELETE") {
           const rule = await sync.ruleFor(cwd);
           if (rule) await removeRule(rule);
         }
         if (req.method !== "GET") await sync.reloadRules();
-        const [rule, target] = await Promise.all([sync.ruleFor(cwd), newRule(cwd)]);
+        const [rule, target] = await Promise.all([sync.ruleFor(cwd), ruleTarget(cwd)]);
         return Response.json({ rule: rule ?? null, target: describeRule(target) });
       }),
 

@@ -1,4 +1,6 @@
-import type { SessionEvent } from "@opticon/core";
+import { type SessionEvent, describeAccess } from "@opticon/core";
+import { api } from "@opticon/server/api";
+import { useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import {
   type Account,
@@ -52,9 +54,10 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   const [copied, setCopied] = useState(false);
   const [autosync, setAutosync] = useState<AutosyncState>();
   const { access, empty: restrictedToNobody, editor } = useAccessEditor(share?.access);
-  // Off by default: listing publicly is a separate, deliberate choice from sharing a link.
-  const [discoverable, setDiscoverable] = useState(share?.discoverable ?? false);
-  const listed = discoverable && access.anyone;
+  // Off by default: listing is a separate, deliberate choice from sharing.
+  const [listed, setListed] = useState(share?.listed ?? false);
+  const policy = useQuery(api.instance.policy, {});
+  const autosyncAccess = policy ? describeAccess(policy.defaultAccess).toLowerCase() : "the default access";
 
   useEffect(() => {
     dialog.current?.showModal();
@@ -129,19 +132,12 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
         {canShare && editor}
 
         {canShare && (
-          <div className="discoverable">
+          <div className="listing">
             <label className="toggle">
-              <input
-                type="checkbox"
-                checked={listed}
-                disabled={!access.anyone}
-                onChange={(e) => setDiscoverable(e.target.checked)}
-              />
-              List on my profile and the public feed
+              <input type="checkbox" checked={listed} onChange={(e) => setListed(e.target.checked)} />
+              List on my profile, the repo page, and the feed
             </label>
-            <span className="hint">
-              {access.anyone ? "Anyone can find it there, not just people with the link." : "Only link shares can be listed."}
-            </span>
+            <span className="hint">Only people who can open it see it there, but they won't need the link.</span>
           </div>
         )}
 
@@ -155,7 +151,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
                 onChange={(e) => {
                   const project = autosync.rule?.repo ?? autosync.rule?.path ?? autosync.target;
                   if (!e.target.checked) return void run(async () => setAutosync(await disableAutosync(props.sessionKey)));
-                  if (confirm(`This will sync all of your sessions in ${project} and make them publicly discoverable. Continue?`)) {
+                  if (confirm(`This will sync all of your sessions in ${project} and list them for ${autosyncAccess}. Continue?`)) {
                     void run(async () => setAutosync(await enableAutosync(props.sessionKey)));
                   }
                 }}
@@ -163,7 +159,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
               Autosync every session in <code>{autosync.rule ? (autosync.rule.repo ?? autosync.rule.path) : autosync.target}</code>
             </label>
             <p className="hint">
-              Public and listed on your profile
+              Shared with {autosyncAccess} and listed on your profile
               {autosyncRepo(autosync.rule?.repo ?? autosync.target) && (
                 <>, and on the repo's page once GitHub confirms you can push to it</>
               )}
@@ -252,7 +248,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   );
 }
 
-/** `owner/name` when an autosync target is a GitHub repo, which gets a public repo page. */
+/** `owner/name` when an autosync target is a GitHub repo, which gets a repo page. */
 function autosyncRepo(target: string | undefined): string | undefined {
   return target?.startsWith("github.com/") ? target.slice("github.com/".length) : undefined;
 }

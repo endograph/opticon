@@ -4,7 +4,8 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
 import { followRow } from "./follows";
-import { decideAccess, randomToken, requireProtocol, requireUser, userForToken } from "./lib";
+import { instancePolicy, requireAllowedAccess } from "./instance";
+import { randomToken, requireProtocol, requireUser, userForToken, viewChecker } from "./lib";
 import { verifyRepoClaim } from "./repos";
 import { accessValidator, sharedEventValidator } from "./schema";
 
@@ -12,9 +13,12 @@ const MAX_BATCH = 500;
 const CHANGES_PAGE = 500;
 const DELETE_BATCH = 500;
 const FEED_LIMIT = 30;
+/** Recent listed shares scanned to fill the feed with ones the viewer can open. */
+const FEED_SCAN = 300;
 const PROFILE_LIMIT = 100;
+const PROFILE_SCAN = 500;
 const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
-/** Recent discoverable shares scanned to rank active repos. */
+/** Recent listed shares scanned to rank active repos. */
 const ACTIVE_SCAN = 2000;
 const BADGE_SCAN = 1000;
 
@@ -26,7 +30,8 @@ const provider = v.union(v.literal("claude"), v.literal("codex"));
  * Creates a share, or updates access on the existing share for this session. `auto` (autosync)
  * only ever creates: it leaves an existing share alone and is rejected for deleted ones. An
  * explicit share of a deleted session replaces the tombstone with a fresh share and link.
- * `discoverable` lists the share publicly; it only takes effect with link access.
+ * `listed` shows the share on the owner's profile, its repo page, and the feed, to viewers who
+ * can open it.
  *
  * `repo` is the session's GitHub remote as the daemon sees it (`github.com/owner/name`). It's
  * only a claim: the share is linked to the repo once GitHub confirms the owner can push to it.
@@ -42,7 +47,7 @@ export const create = action({
     repo: v.optional(v.string()),
     access: accessValidator,
     auto: v.optional(v.boolean()),
-    discoverable: v.optional(v.boolean()),
+    listed: v.optional(v.boolean()),
   },
   handler: async (ctx, { protocol, repo: claim, ...args }): Promise<{ shareId: Id<"shares">; slug: string }> => {
     requireProtocol(protocol);
@@ -95,12 +100,13 @@ export const upsert = internalMutation({
     project: v.optional(v.string()),
     access: accessValidator,
     auto: v.optional(v.boolean()),
-    discoverable: v.optional(v.boolean()),
+    listed: v.optional(v.boolean()),
     slug: v.string(),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, args.token);
     const access = normalizeAccess(args.access);
+    requireAllowedAccess(access, instancePolicy());
     const existing = await ctx.db
       .query("shares")
       .withIndex("by_owner_session", (q) => q.eq("ownerId", user._id).eq("provider", args.provider).eq("sessionId", args.sessionId))
@@ -111,8 +117,8 @@ export const upsert = internalMutation({
       await ctx.db.delete(existing._id);
     } else if (existing) {
       if (!args.auto) {
-        const discoverable = access.anyone && (args.discoverable ?? existing.discoverable ?? false);
-        await ctx.db.patch(existing._id, { access, discoverable, title: args.title, project: args.project, updatedAt: Date.now() });
+        const listed = args.listed ?? existing.listed;
+        await ctx.db.patch(existing._id, { access, listed, title: args.title, project: args.project, updatedAt: Date.now() });
       }
       return { shareId: existing._id, slug: existing.slug };
     }
@@ -129,7 +135,7 @@ export const upsert = internalMutation({
       rev: 0,
       updatedAt: Date.now(),
       auto: args.auto,
-      discoverable: access.anyone && !!args.discoverable,
+      listed: !!args.listed,
     });
     return { shareId, slug: args.slug };
   },
@@ -179,18 +185,17 @@ export const setAccess = mutation({
   handler: async (ctx, { token, shareId, access }) => {
     const share = await ownShare(ctx, token, shareId);
     const normalized = normalizeAccess(access);
-    // Narrowing access also unlists the share.
-    await ctx.db.patch(share._id, { access: normalized, discoverable: normalized.anyone && !!share.discoverable, updatedAt: Date.now() });
+    requireAllowedAccess(normalized, instancePolicy());
+    await ctx.db.patch(share._id, { access: normalized, updatedAt: Date.now() });
   },
 });
 
-/** Lists or unlists a share on the owner's profile and the public feed. Needs link access. */
-export const setDiscoverable = mutation({
-  args: { token: v.string(), shareId: v.id("shares"), discoverable: v.boolean() },
-  handler: async (ctx, { token, shareId, discoverable }) => {
+/** Shows or hides a share on the owner's profile, its repo page, and the feed. Who sees it there is up to its access. */
+export const setListed = mutation({
+  args: { token: v.string(), shareId: v.id("shares"), listed: v.boolean() },
+  handler: async (ctx, { token, shareId, listed }) => {
     const share = await ownShare(ctx, token, shareId);
-    if (discoverable && !share.access.anyone) throw new ConvexError({ code: "not_public" });
-    await ctx.db.patch(share._id, { discoverable });
+    await ctx.db.patch(share._id, { listed });
   },
 });
 
@@ -203,7 +208,7 @@ export const remove = mutation({
   handler: async (ctx, { token, shareId }) => {
     const share = await ownShare(ctx, token, shareId);
     const now = Date.now();
-    await ctx.db.patch(share._id, { deletedAt: now, access: PRIVATE_ACCESS, discoverable: false, eventCount: 0, updatedAt: now });
+    await ctx.db.patch(share._id, { deletedAt: now, access: PRIVATE_ACCESS, listed: false, eventCount: 0, updatedAt: now });
     await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId: share._id });
   },
 });
@@ -247,7 +252,7 @@ export const mine = query({
         repo: s.repo,
         access: s.access,
         auto: s.auto ?? false,
-        discoverable: s.discoverable ?? false,
+        listed: s.listed,
         eventCount: s.eventCount,
         updatedAt: s.updatedAt,
         viewers: await viewerCount(ctx, s._id),
@@ -292,116 +297,140 @@ export const deleted = query({
 });
 
 // --- discovery --------------------------------------------------------------
+//
+// Lists show listed shares the viewer can open, and return what the viewer should refresh
+// (`stale`) for the rest to be decided; pass it to access.refresh.
 
-/** The most recently active discoverable shares, from everyone. */
+/** The most recently active listed shares the viewer can open, from everyone. */
 export const feed = query({
-  args: {},
-  handler: async (ctx) => {
-    const shares = await ctx.db
+  args: { token: v.optional(v.string()) },
+  handler: async (ctx, { token }) => {
+    const checker = viewChecker(ctx, await userForToken(ctx, token));
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_discoverable", (q) => q.eq("discoverable", true))
+      .withIndex("by_listed", (q) => q.eq("listed", true))
       .order("desc")
-      .take(FEED_LIMIT);
-    return Promise.all(shares.map((s) => publicSummary(ctx, s)));
+      .take(FEED_SCAN);
+    const shares = (await checker.visible(recent)).slice(0, FEED_LIMIT);
+    return { shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))), stale: checker.stale };
   },
 });
 
-/** A user's public profile: who they are and their discoverable shares, most recent first. */
+/** A user's profile: who they are and their listed shares the viewer can open, most recent first. */
 export const profile = query({
-  args: { login: v.string() },
-  handler: async (ctx, { login }) => {
+  args: { login: v.string(), token: v.optional(v.string()) },
+  handler: async (ctx, { login, token }) => {
+    const viewer = await userForToken(ctx, token);
+    if (!viewer && !instancePolicy().anonymous) return null;
     const user = await ctx.db
       .query("users")
       .withIndex("by_login", (q) => q.eq("login", login.toLowerCase()))
       .unique();
     if (!user) return null;
-    const shares = await ctx.db
+    const checker = viewChecker(ctx, viewer);
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_owner_discoverable", (q) => q.eq("ownerId", user._id).eq("discoverable", true))
+      .withIndex("by_owner_listed", (q) => q.eq("ownerId", user._id).eq("listed", true))
       .order("desc")
-      .take(PROFILE_LIMIT);
+      .take(PROFILE_SCAN);
+    const shares = (await checker.visible(recent)).slice(0, PROFILE_LIMIT);
     return {
       user: { login: user.login, name: user.name, avatarUrl: user.avatarUrl },
       shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))),
+      stale: checker.stale,
     };
   },
 });
 
-/** One user's discoverable shares in one project. */
+/** One user's listed shares in one project that the viewer can open. */
 export const userProject = query({
-  args: { login: v.string(), project: v.string() },
-  handler: async (ctx, { login, project }) => {
+  args: { login: v.string(), project: v.string(), token: v.optional(v.string()) },
+  handler: async (ctx, { login, project, token }) => {
+    const viewer = await userForToken(ctx, token);
+    if (!viewer && !instancePolicy().anonymous) return null;
     const user = await ctx.db
       .query("users")
       .withIndex("by_login", (q) => q.eq("login", login.toLowerCase()))
       .unique();
     if (!user) return null;
-    const shares = await ctx.db
+    const checker = viewChecker(ctx, viewer);
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_owner_project_discoverable", (q) => q.eq("ownerId", user._id).eq("project", project).eq("discoverable", true))
+      .withIndex("by_owner_project_listed", (q) => q.eq("ownerId", user._id).eq("project", project).eq("listed", true))
       .order("desc")
-      .take(PROFILE_LIMIT);
+      .take(PROFILE_SCAN);
+    const shares = (await checker.visible(recent)).slice(0, PROFILE_LIMIT);
     return {
       user: { login: user.login, name: user.name, avatarUrl: user.avatarUrl },
       shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))),
+      stale: checker.stale,
     };
   },
 });
 
-/** Discoverable shares in a public GitHub repo, from everyone verified to push to it. */
+/** Listed shares in a GitHub repo that the viewer can open, from everyone verified to push to it. */
 export const repoShares = query({
-  args: { repo: v.string() },
-  handler: async (ctx, { repo }) => {
-    const shares = await ctx.db
+  args: { repo: v.string(), token: v.optional(v.string()) },
+  handler: async (ctx, { repo, token }) => {
+    const checker = viewChecker(ctx, await userForToken(ctx, token));
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_repo_discoverable", (q) => q.eq("repo", repo.toLowerCase()).eq("discoverable", true))
+      .withIndex("by_repo_listed", (q) => q.eq("repo", repo.toLowerCase()).eq("listed", true))
       .order("desc")
-      .take(PROFILE_LIMIT);
-    return Promise.all(shares.map((s) => publicSummary(ctx, s)));
+      .take(PROFILE_SCAN);
+    const shares = (await checker.visible(recent)).slice(0, PROFILE_LIMIT);
+    return { shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))), stale: checker.stale };
   },
 });
 
 /**
- * Repos with discoverable sessions active in the last week, busiest first. Computed from recent
- * shares rather than stored counters, so it can't drift.
+ * Repos with listed sessions the viewer can open, active in the last week, busiest first.
+ * Computed from recent shares rather than stored counters, so it can't drift.
  */
 export const activeRepos = query({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit = 50 }) => {
-    const shares = await ctx.db
+  args: { limit: v.optional(v.number()), token: v.optional(v.string()) },
+  handler: async (ctx, { limit = 50, token }) => {
+    const checker = viewChecker(ctx, await userForToken(ctx, token));
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_discoverable", (q) => q.eq("discoverable", true).gt("updatedAt", Date.now() - ACTIVE_WINDOW_MS))
+      .withIndex("by_listed", (q) => q.eq("listed", true).gt("updatedAt", Date.now() - ACTIVE_WINDOW_MS))
       .order("desc")
       .take(ACTIVE_SCAN);
     const repos = new Map<string, { repo: string; sessions: number; owners: Set<Id<"users">>; updatedAt: number }>();
-    for (const s of shares) {
-      if (!s.repo) continue;
-      const entry = repos.get(s.repo) ?? { repo: s.repo, sessions: 0, owners: new Set(), updatedAt: s.updatedAt };
+    for (const s of await checker.visible(recent.filter((s) => s.repo))) {
+      const entry = repos.get(s.repo!) ?? { repo: s.repo!, sessions: 0, owners: new Set(), updatedAt: s.updatedAt };
       entry.sessions += 1;
       entry.owners.add(s.ownerId);
-      repos.set(s.repo, entry);
+      repos.set(s.repo!, entry);
     }
     const ranked = [...repos.values()].sort((a, b) => b.sessions - a.sessions || b.updatedAt - a.updatedAt).slice(0, limit);
-    return Promise.all(
-      ranked.map(async ({ owners, ...entry }) => ({
-        ...entry,
-        contributors: (await Promise.all([...owners].map((id) => ctx.db.get(id))))
-          .filter((u) => u !== null)
-          .map((u) => ({ login: u.login, avatarUrl: u.avatarUrl })),
-      })),
-    );
+    return {
+      repos: await Promise.all(
+        ranked.map(async ({ owners, ...entry }) => ({
+          ...entry,
+          contributors: (await Promise.all([...owners].map((id) => ctx.db.get(id))))
+            .filter((u) => u !== null)
+            .map((u) => ({ login: u.login, avatarUrl: u.avatarUrl })),
+        })),
+      ),
+      stale: checker.stale,
+    };
   },
 });
 
-/** How many discoverable sessions a repo has, for its README badge. `capped` when there are more. */
+/**
+ * How many listed sessions in a repo a signed-out visitor can open, for its README badge.
+ * `capped` when there are more.
+ */
 export const repoSessionCount = query({
   args: { repo: v.string() },
   handler: async (ctx, { repo }) => {
-    const shares = await ctx.db
+    const recent = await ctx.db
       .query("shares")
-      .withIndex("by_repo_discoverable", (q) => q.eq("repo", repo.toLowerCase()).eq("discoverable", true))
+      .withIndex("by_repo_listed", (q) => q.eq("repo", repo.toLowerCase()).eq("listed", true))
       .take(BADGE_SCAN);
-    return { count: shares.length, capped: shares.length === BADGE_SCAN };
+    const visible = await viewChecker(ctx, null).visible(recent);
+    return { count: visible.length, capped: recent.length === BADGE_SCAN };
   },
 });
 
@@ -428,7 +457,7 @@ export const view = query({
     const share = await shareBySlug(ctx, slug);
     if (!share) return { status: "not_found" as const };
     const viewer = await userForToken(ctx, token);
-    const decision = decideAccess(share.access, share.ownerId, viewer);
+    const decision = await viewChecker(ctx, viewer).decide(share);
     if (!decision.ok) {
       if (decision.reason === "login_required") return { status: "login_required" as const };
       return { status: "forbidden" as const, stale: decision.stale, signedInAs: viewer?.login };
@@ -453,6 +482,8 @@ export const view = query({
       },
       owner: owner && { login: owner.login, name: owner.name, avatarUrl: owner.avatarUrl },
       viewers: await viewerCount(ctx, share._id),
+      /** Answers to refresh in the background; access still holds for now. */
+      stale: decision.stale,
     };
   },
 });
@@ -466,7 +497,7 @@ export const changes = query({
   handler: async (ctx, { slug, token, afterRev }) => {
     const share = await shareBySlug(ctx, slug);
     if (!share) return null;
-    if (!decideAccess(share.access, share.ownerId, await userForToken(ctx, token)).ok) return null;
+    if (!(await viewChecker(ctx, await userForToken(ctx, token)).decide(share)).ok) return null;
     const rows = await ctx.db
       .query("shareEvents")
       .withIndex("by_share_rev", (q) => q.eq("shareId", share._id).gt("rev", afterRev))

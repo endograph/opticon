@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation } from "./_generated/server";
 import { recordView } from "./follows";
-import { PRESENCE_TTL_MS, decideAccess, userForToken } from "./lib";
+import { PRESENCE_TTL_MS, canView, userForToken } from "./lib";
 import { shareBySlug } from "./shares";
 
 /**
@@ -17,7 +17,7 @@ export const heartbeat = mutation({
     const share = await shareBySlug(ctx, slug);
     if (!share) throw new ConvexError({ code: "not_found" });
     const user = await userForToken(ctx, token);
-    if (!decideAccess(share.access, share.ownerId, user).ok) throw new ConvexError({ code: "forbidden" });
+    if (!(await canView(ctx, share, user)).ok) throw new ConvexError({ code: "forbidden" });
     if (user) await recordView(ctx, user, share);
     const now = Date.now();
     const existing = await ctx.db
@@ -37,7 +37,7 @@ export const leave = mutation({
     const share = await shareBySlug(ctx, slug);
     if (!share) return;
     const user = await userForToken(ctx, token);
-    if (user && decideAccess(share.access, share.ownerId, user).ok) await recordView(ctx, user, share);
+    if (user && (await canView(ctx, share, user)).ok) await recordView(ctx, user, share);
     const existing = await ctx.db
       .query("presence")
       .withIndex("by_share_viewer", (q) => q.eq("shareId", share._id).eq("viewerId", viewerId))

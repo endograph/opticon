@@ -42,11 +42,19 @@ opticon login
 
 Then open a session and click Share. You get a preview before uploading: message text and tool names and statuses, with credentials redacted. Thinking, tool inputs and tool outputs stay local.
 
-Choose who can open the link: anyone, specific GitHub users, or orgs and teams. Shares only appear on your profile and the public feed if you check the box. They update live while someone is watching; `opticon live-sync off` keeps them at the last shared or resynced version.
+Choose who can open it. The options add up: anyone with the link, people who can read the session's GitHub repo (once GitHub confirms you can push to it), and specific GitHub users, orgs or teams. Listing is separate: a listed share shows on your profile, its repo page and the feed, but only to people who can open it. Shares update live while someone is watching; `opticon live-sync off` keeps them at the last shared or resynced version.
 
-Run `opticon autosync` in a project directory to share its sessions as you work. After confirmation, sessions active from then on are uploaded about every 30 seconds without a preview and listed publicly. It matches by git remote, so clones and worktrees count too. Stop with `opticon autosync off`.
+Run `opticon autosync` in a project directory to share its sessions as you work. After confirmation, sessions active from then on are uploaded about every 30 seconds without a preview and listed, with the default access (the link, on opticon.tv). It matches by git remote, so clones and worktrees count too. Stop with `opticon autosync off`.
 
 Unshare makes the uploaded copy private. Delete removes it and keeps autosync from uploading it again.
+
+## Running your own
+
+The backend is a Convex app in `apps/server`. These deployment environment variables limit an instance without changing what share settings mean:
+
+- `OPTICON_ALLOWED_ORGS=acme`: only members of these GitHub orgs can sign in. Membership is re-checked hourly; people who leave are signed out.
+- `OPTICON_ANONYMOUS=0`: signed-out visitors can't open anything, including link shares, and there are no badges.
+- `OPTICON_SHARE_GRANTS=repo,people`: which kinds of access shares may use (`link`, `people`, `repo`). Others are refused and ignored on existing shares.
 
 ## Development
 

@@ -1,4 +1,4 @@
-import { LINK_ACCESS, type ShareAccess } from "@opticon/core";
+import type { ShareAccess } from "@opticon/core";
 import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { OPTICON_HOME } from "./paths";
@@ -8,7 +8,8 @@ export const AUTOSYNC_FILE = join(OPTICON_HOME, "autosync.json");
 /**
  * Autosync for one project, matched by git remote (so every clone and worktree counts) or,
  * outside a git repo, by directory prefix. Syncing, sharing, and listing are separate so a rule
- * can later sync privately; for now the CLI and UI only create public, discoverable rules.
+ * can later sync privately; for now the CLI and UI create listed rules with the instance's
+ * default access.
  */
 export interface AutosyncRule {
   /** Normalized origin remote, e.g. `github.com/rt2zz/opticon`. */
@@ -18,8 +19,8 @@ export interface AutosyncRule {
   sync: boolean;
   /** Access for newly created shares. Absent: synced but private. */
   share?: ShareAccess;
-  /** List new shares on the owner's profile and the public feed. Needs link access. */
-  discoverable?: boolean;
+  /** List new shares on the owner's profile, the repo page, and the feed, for viewers who can open them. */
+  listed?: boolean;
   /** ISO time the rule was added. Sessions last active before it are left alone (no backfill). */
   since: string;
 }
@@ -27,20 +28,37 @@ export interface AutosyncRule {
 export async function readRules(): Promise<AutosyncRule[]> {
   const file = Bun.file(AUTOSYNC_FILE);
   if (!(await file.exists())) return [];
-  const data = (await file.json().catch(() => undefined)) as { rules?: AutosyncRule[] } | undefined;
-  return data?.rules ?? [];
+  const data = (await file.json().catch(() => undefined)) as { rules?: StoredRule[] } | undefined;
+  return (data?.rules ?? []).map(upgradeRule);
+}
+
+/** Rules written before access had `link` and `repo`, and `discoverable` became `listed`. */
+type StoredRule = Omit<AutosyncRule, "share"> & {
+  share?: ShareAccess & { anyone?: boolean };
+  discoverable?: boolean;
+};
+
+function upgradeRule({ discoverable, ...rule }: StoredRule): AutosyncRule {
+  const share = rule.share && { ...rule.share, link: rule.share.link ?? rule.share.anyone ?? false, repo: rule.share.repo ?? false };
+  if (share) delete share.anyone;
+  return { ...rule, share, listed: rule.listed ?? discoverable };
 }
 
 export async function writeRules(rules: AutosyncRule[]): Promise<void> {
   await Bun.write(AUTOSYNC_FILE, `${JSON.stringify({ rules }, null, 2)}\n`);
 }
 
-/** A public, discoverable rule for `dir`: by remote when it has one, else by path. */
-export async function newRule(dir: string): Promise<AutosyncRule> {
+/** What a rule for `dir` matches: its remote when it has one, else its path. */
+export async function ruleTarget(dir: string): Promise<Pick<AutosyncRule, "repo" | "path">> {
   // Session cwds are real paths (e.g. /private/tmp on macOS, not /tmp).
   const path = await realpath(resolve(dir)).catch(() => resolve(dir));
   const repo = await repoOf(path);
-  return { ...(repo ? { repo } : { path }), sync: true, share: LINK_ACCESS, discoverable: true, since: new Date().toISOString() };
+  return repo ? { repo } : { path };
+}
+
+/** A listed rule for `dir` that shares with `access`. */
+export async function newRule(dir: string, access: ShareAccess): Promise<AutosyncRule> {
+  return { ...(await ruleTarget(dir)), sync: true, share: access, listed: true, since: new Date().toISOString() };
 }
 
 /** Adds or replaces the rule for the same repo or path. */
@@ -58,7 +76,7 @@ export async function removeRule(rule: Pick<AutosyncRule, "repo" | "path">): Pro
   return kept.length !== rules.length;
 }
 
-export const describeRule = (rule: AutosyncRule) => rule.repo ?? rule.path ?? "?";
+export const describeRule = (rule: Pick<AutosyncRule, "repo" | "path">) => rule.repo ?? rule.path ?? "?";
 
 function sameTarget(a: Pick<AutosyncRule, "repo" | "path">, b: Pick<AutosyncRule, "repo" | "path">): boolean {
   return a.repo === b.repo && a.path === b.path;

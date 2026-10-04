@@ -65,7 +65,7 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
   const [copied, setCopied] = useState(false);
   const remove = useMutation(api.shares.remove);
   const setAccess = useMutation(api.shares.setAccess);
-  const setDiscoverable = useMutation(api.shares.setDiscoverable);
+  const setListed = useMutation(api.shares.setListed);
   const { me } = useIdentity();
   const privateShare = isPrivate(share.access);
   const url = `${config.webUrl}/s/${share.slug}`;
@@ -80,7 +80,7 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
           <ProviderIcon provider={share.provider} />
           <ProjectLink project={share.project} repo={share.repo} login={me?.login} />
           <span>{describeAccess(share.access)}</span>
-          {share.discoverable && <span title="On your profile and the public feed">listed</span>}
+          {share.listed && <span title="On your profile, the repo page, and the feed">listed</span>}
           {share.auto && <span title="Created by autosync">auto</span>}
           <span>{share.eventCount} events</span>
           <span>updated {relativeTime(new Date(share.updatedAt).toISOString())}</span>
@@ -111,16 +111,16 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
         <button type="button" className="button" onClick={() => setEditing(!editing)} aria-expanded={editing}>
           Access…
         </button>
-        {share.access.anyone && (
-          <button
-            type="button"
-            className="button"
-            title={share.discoverable ? "Remove from your profile and the public feed" : "Show on your profile and the public feed"}
-            onClick={() => void setDiscoverable({ token, shareId: share.shareId, discoverable: !share.discoverable })}
-          >
-            {share.discoverable ? "Unlist" : "List publicly"}
-          </button>
-        )}
+        <button
+          type="button"
+          className="button"
+          title={share.listed
+            ? "Remove from your profile, the repo page, and the feed"
+            : "Show on your profile, the repo page, and the feed, to people who can open it"}
+          onClick={() => void setListed({ token, shareId: share.shareId, listed: !share.listed })}
+        >
+          {share.listed ? "Unlist" : "List"}
+        </button>
         {!privateShare && (
           <button
             type="button"

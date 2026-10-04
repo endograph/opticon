@@ -99,9 +99,13 @@ export const upsertUser = internalMutation({
     githubTokenExpiresAt: v.optional(v.number()),
     githubRefreshToken: v.optional(v.string()),
     githubRefreshTokenExpiresAt: v.optional(v.number()),
+    /** The allowed org sign-in just confirmed, on org-limited instances. */
+    memberOf: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, { memberOf, ...args }) => {
     const login = args.login.toLowerCase();
+    const now = Date.now();
+    const member = memberOf ? { memberOf, memberVerifiedAt: now, memberCheckedAt: now } : {};
     const existing = await ctx.db
       .query("users")
       .withIndex("by_github_id", (q) => q.eq("githubId", args.githubId))
@@ -114,10 +118,11 @@ export const upsertUser = internalMutation({
         githubRefreshToken: args.githubRefreshToken,
         githubRefreshTokenExpiresAt: args.githubRefreshTokenExpiresAt,
         githubRefreshUntil: undefined,
+        ...member,
       });
       return existing._id;
     }
-    return ctx.db.insert("users", { ...args, login });
+    return ctx.db.insert("users", { ...args, login, ...member });
   },
 });
 

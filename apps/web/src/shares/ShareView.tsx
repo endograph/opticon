@@ -1,6 +1,6 @@
 import type { SessionEvent, SharedEvent } from "@opticon/core";
 import { api } from "@opticon/server/api";
-import { useAction, useConvex, useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
 import { Transcript } from "../Transcript";
 import { isLocal, setPageTitle } from "../config";
@@ -11,6 +11,7 @@ import { signOut } from "../session";
 import { recordLocalVisit, setLocalFollowing, useLocalHistory } from "./localHistory";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProjectLink } from "./Discover";
+import { useAccessRefresh } from "./refresh";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -21,7 +22,7 @@ export function ShareView({ slug }: { slug: string }) {
   const events = useShareEvents(slug, token, ok);
   usePresence(slug, token, ok);
   useLocalVisit(slug, token, ok ? view.share.eventCount : undefined);
-  useMembershipRefresh(token, view?.status === "forbidden" && view.stale);
+  useAccessRefresh(token, view?.status === "ok" || view?.status === "forbidden" ? view.stale : undefined);
 
   useEffect(() => {
     setPageTitle(ok ? view.share.title : undefined);
@@ -34,7 +35,7 @@ export function ShareView({ slug }: { slug: string }) {
   if (view.status === "login_required") {
     return (
       <Message title="Sign in to view this session">
-        It's shared with specific GitHub users or groups.
+        It's shared with specific GitHub users, orgs, or people who can read its repo.
         <div className="actions">
           <SignInButton primary />
         </div>
@@ -45,10 +46,10 @@ export function ShareView({ slug }: { slug: string }) {
     return (
       <Message title="You don't have access to this session">
         {view.stale ? (
-          "Checking your GitHub org and team membership…"
+          "Checking your GitHub access…"
         ) : (
           <>
-            You're signed in as <strong>{view.signedInAs}</strong>. If you were added to an org or team recently, or
+            You're signed in as <strong>{view.signedInAs}</strong>. If you were given access on GitHub recently, or
             your org hasn't approved Opticon yet, ask the owner or an org admin.
           </>
         )}
@@ -202,11 +203,4 @@ function useLocalVisit(slug: string, token: string | undefined, eventCount: numb
   useEffect(() => {
     if (!token && eventCount !== undefined) recordLocalVisit(slug, eventCount);
   }, [slug, token, eventCount]);
-}
-
-function useMembershipRefresh(token: string | undefined, needed: boolean): void {
-  const refresh = useAction(api.access.refreshMemberships);
-  useEffect(() => {
-    if (needed && token) void refresh({ token }).catch(() => {});
-  }, [needed, token, refresh]);
 }

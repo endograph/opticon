@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, type MutationCtx, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { type GithubCredentials, githubHeaders } from "./access";
+import { type GithubCredentials, githubHeaders, saveVisibility } from "./access";
 
 /** How long a verified grant is trusted before the cron checks it again. */
 export const REPO_TTL_MS = 24 * 60 * 60_000;
@@ -15,9 +15,9 @@ export function parseRepoClaim(claim: string): string | null {
 }
 
 /**
- * Resolves the repo a daemon claims for a share. Returns the canonical repo when it's public and
- * the user can push to it, null when it isn't (or can't be verified), and undefined when GitHub
- * couldn't answer, in which case the share keeps whatever it had.
+ * Resolves the repo a daemon claims for a share. Returns the canonical repo when the user can
+ * push to it, null when they can't (or it can't be verified), and undefined when GitHub couldn't
+ * answer, in which case the share keeps whatever it had.
  */
 export async function verifyRepoClaim(ctx: ActionCtx, token: string, claim: string | undefined): Promise<string | null | undefined> {
   const repo = claim ? parseRepoClaim(claim) : null;
@@ -26,9 +26,9 @@ export async function verifyRepoClaim(ctx: ActionCtx, token: string, claim: stri
   if (!credentials) return null;
   if (await ctx.runQuery(internal.repos.freshGrant, { userId: credentials.userId, repo })) return repo;
   try {
-    const canonical = await pushableRepo(ctx, credentials, repo);
-    await ctx.runMutation(internal.repos.settle, { userId: credentials.userId, repo, canonical });
-    return canonical;
+    const pushable = await pushableRepo(ctx, credentials, repo);
+    await ctx.runMutation(internal.repos.settle, { userId: credentials.userId, repo, ...pushable });
+    return pushable.canonical;
   } catch (error) {
     console.warn(`Couldn't verify ${repo}: ${(error as Error).message}`);
     return undefined;
@@ -36,8 +36,9 @@ export async function verifyRepoClaim(ctx: ActionCtx, token: string, claim: stri
 }
 
 /**
- * Re-verifies grants older than REPO_TTL_MS. Lost access unlists the user's shares from the repo
- * page; a renamed repo moves them. Grants GitHub can't answer for are retried next run.
+ * Re-verifies grants older than REPO_TTL_MS, and with them whether each repo is public. Lost
+ * access unlinks the user's shares from the repo; a renamed repo moves them. Grants GitHub can't
+ * answer for are retried next run.
  */
 export const recheck = internalAction({
   args: {},
@@ -46,8 +47,8 @@ export const recheck = internalAction({
     for (const grant of stale) {
       const credentials = await ctx.runQuery(internal.auth.githubTokenForUser, { userId: grant.userId });
       try {
-        const canonical = credentials ? await pushableRepo(ctx, credentials, grant.repo) : null;
-        await ctx.runMutation(internal.repos.settle, { userId: grant.userId, repo: grant.repo, canonical });
+        const pushable = credentials ? await pushableRepo(ctx, credentials, grant.repo) : { canonical: null };
+        await ctx.runMutation(internal.repos.settle, { userId: grant.userId, repo: grant.repo, ...pushable });
       } catch (error) {
         console.warn(`Couldn't re-verify ${grant.repo}: ${(error as Error).message}`);
       }
@@ -56,17 +57,21 @@ export const recheck = internalAction({
 });
 
 /**
- * The canonical `owner/name` if `repo` is public and the user can push to it, else null. GitHub
- * follows renames, so it may differ from `repo`. Throws when GitHub can't answer.
+ * The canonical `owner/name` if the user can push to `repo`, else null, and whether it's private.
+ * GitHub follows renames, so it may differ from `repo`. Throws when GitHub can't answer.
  */
-async function pushableRepo(ctx: ActionCtx, credentials: GithubCredentials, repo: string): Promise<string | null> {
+async function pushableRepo(
+  ctx: ActionCtx,
+  credentials: GithubCredentials,
+  repo: string,
+): Promise<{ canonical: string | null; private?: boolean }> {
   const headers = await githubHeaders(ctx, credentials);
-  if (!headers) return null;
+  if (!headers) return { canonical: null };
   const res = await fetch(`https://api.github.com/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) });
-  if (res.status === 401 || res.status === 404) return null;
+  if (res.status === 401 || res.status === 404) return { canonical: null };
   if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
   const body = (await res.json()) as { full_name: string; private: boolean; permissions?: { push?: boolean } };
-  return !body.private && body.permissions?.push ? body.full_name.toLowerCase() : null;
+  return { canonical: body.permissions?.push ? body.full_name.toLowerCase() : null, private: body.private };
 }
 
 export const freshGrant = internalQuery({
@@ -91,12 +96,14 @@ export const staleGrants = internalQuery({
 
 /**
  * Records the result of checking `repo` for a user: `canonical` is the verified repo (possibly
- * renamed) or null. The user's shares listed under `repo` follow it.
+ * renamed) or null, and `private` its visibility when GitHub said. The user's shares linked to
+ * `repo` follow it.
  */
 export const settle = internalMutation({
-  args: { userId: v.id("users"), repo: v.string(), canonical: v.union(v.string(), v.null()) },
-  handler: async (ctx, { userId, repo, canonical }) => {
+  args: { userId: v.id("users"), repo: v.string(), canonical: v.union(v.string(), v.null()), private: v.optional(v.boolean()) },
+  handler: async (ctx, { userId, repo, canonical, private: isPrivate }) => {
     if (canonical) await saveGrant(ctx, userId, canonical);
+    if (canonical && isPrivate !== undefined) await saveVisibility(ctx, canonical, isPrivate);
     if (canonical === repo) return;
     const grant = await ctx.db
       .query("repoAccess")

@@ -2,10 +2,11 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export const accessValidator = v.object({
-  anyone: v.boolean(),
+  link: v.boolean(),
   users: v.array(v.string()),
   orgs: v.array(v.string()),
   teams: v.array(v.string()),
+  repo: v.boolean(),
 });
 
 export const sharedEventValidator = v.union(
@@ -46,15 +47,24 @@ export default defineSchema({
     githubRefreshToken: v.optional(v.string()),
     githubRefreshTokenExpiresAt: v.optional(v.number()),
     githubRefreshUntil: v.optional(v.number()),
-    /** Cached membership, refreshed by access.refreshMemberships. */
+    /** Cached membership, refreshed by access.refresh. */
     orgs: v.optional(v.array(v.string())),
     teams: v.optional(v.array(v.string())),
     membershipCheckedAt: v.optional(v.number()),
+    /**
+     * On instances limited to some orgs (OPTICON_ALLOWED_ORGS): the allowed org GitHub last
+     * confirmed this user belongs to, and when. Sign-in lapses once the confirmation is too old.
+     */
+    memberOf: v.optional(v.string()),
+    memberVerifiedAt: v.optional(v.number()),
+    /** When membership was last checked, whatever the answer. Drives the recheck cron. */
+    memberCheckedAt: v.optional(v.number()),
     /** "Live sync shared sessions". Defaults to on. */
     liveSync: v.optional(v.boolean()),
   })
     .index("by_github_id", ["githubId"])
-    .index("by_login", ["login"]),
+    .index("by_login", ["login"])
+    .index("by_member_checked", ["memberCheckedAt"]),
 
   /** Bearer tokens. Only SHA-256 hashes are stored. */
   tokens: defineTable({
@@ -85,7 +95,7 @@ export default defineSchema({
     .index("by_poll_hash", ["pollHash"]),
 
   shares: defineTable({
-    /** Unguessable link id; for `anyone` shares, possession of the link is the credential. */
+    /** Unguessable link id; for `link` shares, possession of the link is the credential. */
     slug: v.string(),
     ownerId: v.id("users"),
     provider: v.union(v.literal("claude"), v.literal("codex")),
@@ -94,8 +104,8 @@ export default defineSchema({
     /** Display name: the repo name, or the directory name outside a repo. Never a full path. */
     project: v.optional(v.string()),
     /**
-     * Public GitHub repo as lowercase `owner/name`. Only set once the server has confirmed, with
-     * the owner's own GitHub token, that the owner can push to it; lists the share on its repo page.
+     * GitHub repo as lowercase `owner/name`. Only set once the server has confirmed, with the
+     * owner's own GitHub token, that the owner can push to it. The `repo` grant and repo pages use it.
      */
     repo: v.optional(v.string()),
     access: accessValidator,
@@ -107,8 +117,8 @@ export default defineSchema({
     updatedAt: v.number(),
     /** Created by an autosync rule rather than by hand. */
     auto: v.optional(v.boolean()),
-    /** Listed on the owner's profile and the public feed. Only ever true while `access.anyone`. */
-    discoverable: v.optional(v.boolean()),
+    /** Shown on the owner's profile, repo pages, and the feed, to viewers who can open it. */
+    listed: v.boolean(),
     /**
      * Set when the owner deletes the share. The row stays as a tombstone (events are purged) so
      * autosync never re-creates or re-uploads it; only an explicit share replaces it.
@@ -118,12 +128,12 @@ export default defineSchema({
     .index("by_slug", ["slug"])
     .index("by_owner", ["ownerId"])
     .index("by_owner_session", ["ownerId", "provider", "sessionId"])
-    .index("by_discoverable", ["discoverable", "updatedAt"])
-    .index("by_owner_discoverable", ["ownerId", "discoverable", "updatedAt"])
-    .index("by_owner_project_discoverable", ["ownerId", "project", "discoverable", "updatedAt"])
-    .index("by_repo_discoverable", ["repo", "discoverable", "updatedAt"]),
+    .index("by_listed", ["listed", "updatedAt"])
+    .index("by_owner_listed", ["ownerId", "listed", "updatedAt"])
+    .index("by_owner_project_listed", ["ownerId", "project", "listed", "updatedAt"])
+    .index("by_repo_listed", ["repo", "listed", "updatedAt"]),
 
-  /** Verified push access to a public GitHub repo, re-checked by a daily cron. Only grants are stored. */
+  /** Verified push access to a GitHub repo, re-checked by a daily cron. Only grants are stored. */
   repoAccess: defineTable({
     userId: v.id("users"),
     /** Lowercase `owner/name`, canonical after renames. */
@@ -132,6 +142,21 @@ export default defineSchema({
   })
     .index("by_user_repo", ["userId", "repo"])
     .index("by_checked", ["checkedAt"]),
+
+  /** Whether a linked repo is public, as GitHub last said. Public repos grant `repo` access to everyone. */
+  repoVisibility: defineTable({
+    repo: v.string(),
+    private: v.boolean(),
+    checkedAt: v.number(),
+  }).index("by_repo", ["repo"]),
+
+  /** Whether a viewer can read a repo, as GitHub last said, for the `repo` grant. Denials are stored too. */
+  repoReads: defineTable({
+    userId: v.id("users"),
+    repo: v.string(),
+    canRead: v.boolean(),
+    checkedAt: v.number(),
+  }).index("by_user_repo", ["userId", "repo"]),
 
   shareEvents: defineTable({
     shareId: v.id("shares"),
@@ -164,5 +189,4 @@ export default defineSchema({
     .index("by_user_share", ["userId", "shareId"])
     .index("by_user_following", ["userId", "following", "lastViewedAt"])
     .index("by_share", ["shareId"]),
-// Off only while migrations.shareAccessV2 rewrites shares into the next schema.
-}, { schemaValidation: false });
+});

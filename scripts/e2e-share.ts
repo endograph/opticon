@@ -120,15 +120,15 @@ try {
     if (text.includes("sk-ant") || !text.includes("[REDACTED]")) throw new Error("redaction missing");
   });
 
-  await step("listing publicly is opt-in from the share dialog", async () => {
-    const listedMark = ".share-row span[title='On your profile and the public feed']";
+  await step("listing is opt-in from the share dialog", async () => {
+    const listedMark = ".share-row span[title='On your profile, the repo page, and the feed']";
     await owner.goto("http://127.0.0.1:4747/shares");
     await owner.waitForSelector(".share-row:has-text('first message')");
     if (await owner.locator(listedMark).count()) throw new Error("listed without opting in");
     // The dialog from creating the share is still open; reopen it as an existing share.
     await local.keyboard.press("Escape");
     await local.click("text=Manage…");
-    const box = local.locator(".share-dialog .discoverable input[type=checkbox]");
+    const box = local.locator(".share-dialog .listing input[type=checkbox]");
     if (await box.isChecked()) throw new Error("checkbox should start unchecked");
     await box.check();
     await local.click("text=Save & resync");
@@ -152,7 +152,9 @@ try {
 
   await step("restricting to a user locks out others", async () => {
     await local.click("text=Manage…");
-    await local.click("text=Only people I choose");
+    // Grants add up: drop the link, then name a person.
+    await local.uncheck(".share-access label:has-text('Anyone with the link') input");
+    await local.check(".share-access label:has-text('People I choose') input");
     await local.fill(".access-fields label:has-text('People') input", "@Friend");
     await local.click("text=Save & resync");
     await local.waitForSelector("text=Saving…", { state: "detached" });

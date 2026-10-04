@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { LINK_ACCESS, PRIVATE_ACCESS, PROTOCOL_VERSION, type SharedEvent } from "@opticon/core/protocol";
 import { convexTest } from "convex-test";
 import { api, internal } from "../convex/_generated/api";
-import { decideAccess, sha256 } from "../convex/lib";
+import { instancePolicy } from "../convex/instance";
+import { ACCESS_EXPIRY_MS, ACCESS_REFRESH_MS, decideAccess, sha256 } from "../convex/lib";
 import schema from "../convex/schema";
 
 const modules = {
@@ -17,7 +18,22 @@ const modules = {
   "../convex/crons.ts": () => import("../convex/crons"),
   "../convex/badge.ts": () => import("../convex/badge"),
   "../convex/http.ts": () => import("../convex/http"),
+  "../convex/instance.ts": () => import("../convex/instance"),
 };
+
+/** Runs `run` with instance env vars set, restoring them afterwards. */
+async function withEnv<R>(vars: Record<string, string>, run: () => Promise<R>): Promise<R> {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  try {
+    return await run();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
 
 type T = ReturnType<typeof convexTest>;
 
@@ -28,6 +44,30 @@ async function signIn(t: T, login: string, extra: Record<string, unknown> = {}) 
   const token = `token-${login}`;
   await t.mutation(internal.auth.storeToken, { hash: await sha256(token), userId, kind: "web" });
   return token;
+}
+
+/** Stubs GET /repos/:owner/:name; `repos` maps the requested path to GitHub's answer. */
+async function withRepos<R>(
+  repos: Record<string, { full_name: string; private?: boolean; push?: boolean; pull?: boolean } | number>,
+  run: (calls: string[]) => Promise<R>,
+) {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const path = String(input).replace("https://api.github.com/repos/", "");
+    calls.push(path);
+    const repo = repos[path];
+    if (repo === undefined) return new Response("Not Found", { status: 404 });
+    if (typeof repo === "number") return new Response("", { status: repo });
+    return Response.json({
+      full_name: repo.full_name, private: repo.private ?? false, permissions: { push: repo.push ?? false, pull: repo.pull ?? true },
+    });
+  }) as unknown as typeof fetch;
+  try {
+    return await run(calls);
+  } finally {
+    globalThis.fetch = original;
+  }
 }
 
 const msg = (id: string, text: string): SharedEvent => ({ kind: "message", id, role: "assistant", text });
@@ -75,12 +115,12 @@ describe("shares", () => {
       protocol: PROTOCOL_VERSION,
       provider: "claude",
       sessionId: "s1",
-      access: { anyone: false, users: ["@Friend"], orgs: [], teams: [] },
+      access: { ...PRIVATE_ACCESS, users: ["@Friend"] },
     });
     expect(again.slug).toBe(slug);
     const mine = await t.query(api.shares.mine, { token: owner });
     expect(mine).toHaveLength(1);
-    expect(mine[0]?.access).toEqual({ anyone: false, users: ["friend"], orgs: [], teams: [] });
+    expect(mine[0]?.access).toEqual({ ...PRIVATE_ACCESS, users: ["friend"] });
   });
 
   test("rejects protocol mismatches and other users", async () => {
@@ -137,36 +177,38 @@ describe("shares", () => {
 });
 
 describe("discovery", () => {
-  const share = (t: T, token: string, sessionId: string, access = LINK_ACCESS, discoverable = true) =>
-    t.action(api.shares.create, { token, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, title: sessionId, access, discoverable });
+  const share = (t: T, token: string, sessionId: string, access = LINK_ACCESS, listed = true) =>
+    t.action(api.shares.create, { token, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, title: sessionId, access, listed });
+  const titles = (list: { shares: { title?: string }[] } | null) => list?.shares.map((s) => s.title);
 
-  test("discoverable link shares appear on the feed and the owner's profile", async () => {
+  test("listed shares appear on the feed and the owner's profile, to viewers who can open them", async () => {
     const { t, owner } = await setup();
+    const friend = await signIn(t, "friend");
     await share(t, owner, "listed");
-    await share(t, owner, "restricted", { anyone: false, users: ["friend"], orgs: [], teams: [] });
+    await share(t, owner, "restricted", { ...PRIVATE_ACCESS, users: ["friend"] });
     await share(t, owner, "unlisted", LINK_ACCESS, false);
-    expect((await t.query(api.shares.feed, {})).map((s) => s.title)).toEqual(["listed"]);
+    expect(titles(await t.query(api.shares.feed, {}))).toEqual(["listed"]);
+    expect(titles(await t.query(api.shares.feed, { token: friend }))).toEqual(["restricted", "listed"]);
     const profile = await t.query(api.shares.profile, { login: "Owner" });
     expect(profile?.user.login).toBe("owner");
-    expect(profile?.shares.map((s) => s.title)).toEqual(["listed"]);
+    expect(titles(profile)).toEqual(["listed"]);
+    expect(titles(await t.query(api.shares.profile, { login: "owner", token: owner }))).toEqual(["restricted", "listed"]);
     expect(await t.query(api.shares.profile, { login: "nobody" })).toBeNull();
   });
 
-  test("narrowing access, unsharing, or deleting unlists; listing needs link access", async () => {
+  test("listing is separate from access; unsharing hides and deleting unlists", async () => {
     const { t, owner } = await setup();
     const a = await share(t, owner, "a");
     const b = await share(t, owner, "b");
     await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: PRIVATE_ACCESS });
     await t.mutation(api.shares.remove, { token: owner, shareId: b.shareId });
-    expect(await t.query(api.shares.feed, {})).toEqual([]);
+    expect(titles(await t.query(api.shares.feed, {}))).toEqual([]);
 
     await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: LINK_ACCESS });
-    expect(await t.query(api.shares.feed, {})).toEqual([]);
-    await t.mutation(api.shares.setDiscoverable, { token: owner, shareId: a.shareId, discoverable: true });
-    expect((await t.query(api.shares.feed, {})).map((s) => s.title)).toEqual(["a"]);
-
-    await t.mutation(api.shares.setAccess, { token: owner, shareId: a.shareId, access: PRIVATE_ACCESS });
-    await expect(t.mutation(api.shares.setDiscoverable, { token: owner, shareId: a.shareId, discoverable: true })).rejects.toThrow(/not_public/);
+    expect(titles(await t.query(api.shares.feed, {}))).toEqual(["a"]);
+    await t.mutation(api.shares.setListed, { token: owner, shareId: a.shareId, listed: false });
+    expect(titles(await t.query(api.shares.feed, {}))).toEqual([]);
+    expect((await t.query(api.shares.mine, { token: owner }))[0]).toMatchObject({ listed: false, access: LINK_ACCESS });
   });
 });
 
@@ -179,17 +221,120 @@ describe("access", () => {
     expect((await t.query(api.shares.view, { slug, token: friend })).status).toBe("ok");
 
     const stranger = await signIn(t, "stranger");
-    expect(await t.query(api.shares.view, { slug, token: stranger })).toMatchObject({ status: "forbidden", stale: true });
+    expect(await t.query(api.shares.view, { slug, token: stranger })).toMatchObject({
+      status: "forbidden", stale: { memberships: true, repos: [] },
+    });
     expect(await t.query(api.shares.changes, { slug, token: stranger, afterRev: 0 })).toBeNull();
 
     const member = await signIn(t, "member", { teams: ["acme/platform"], membershipCheckedAt: Date.now() });
     expect((await t.query(api.shares.view, { slug, token: member })).status).toBe("ok");
   });
 
-  test("decideAccess marks membership stale only when org or team rules exist", () => {
-    const viewer = { _id: "v", login: "v", orgs: [], teams: [], membershipCheckedAt: 0 } as never;
-    expect(decideAccess({ ...PRIVATE_ACCESS, users: ["x"] }, "o", viewer)).toEqual({ ok: false, reason: "forbidden", stale: false });
-    expect(decideAccess({ ...PRIVATE_ACCESS, orgs: ["acme"] }, "o", viewer)).toEqual({ ok: false, reason: "forbidden", stale: true });
+  test("cached membership is refreshed after a while and stops counting after longer", () => {
+    const policy = instancePolicy();
+    const share = { access: { ...PRIVATE_ACCESS, orgs: ["acme"] }, ownerId: "o" as never };
+    const viewer = (age: number) => ({ _id: "v", login: "v", orgs: ["acme"], teams: [], membershipCheckedAt: 1e12 - age }) as never;
+    expect(decideAccess(policy, share, viewer(0), {}, 1e12)).toEqual({ ok: true });
+    expect(decideAccess(policy, share, viewer(ACCESS_REFRESH_MS + 1), {}, 1e12)).toEqual({ ok: true, stale: { memberships: true, repos: [] } });
+    expect(decideAccess(policy, share, viewer(ACCESS_EXPIRY_MS + 1), {}, 1e12)).toMatchObject({ ok: false, reason: "forbidden" });
+    const users = { access: { ...PRIVATE_ACCESS, users: ["x"] }, ownerId: "o" as never };
+    expect(decideAccess(policy, users, viewer(ACCESS_EXPIRY_MS + 1), {}, 1e12)).toEqual({ ok: false, reason: "forbidden", stale: undefined });
+  });
+
+  test("the repo grant follows GitHub: everyone for a public repo, readers for a private one", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    const reader = await signIn(t, "reader", { githubToken: "gh-reader" });
+    const outsider = await signIn(t, "outsider", { githubToken: "gh-outsider" });
+    const repoAccess = { ...PRIVATE_ACCESS, repo: true };
+    const create = (sessionId: string, repo: string) =>
+      t.action(api.shares.create, { token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, repo, access: repoAccess, listed: true });
+    const { slug: open } = await withRepos({ "acme/open": { full_name: "acme/open", push: true } }, () => create("s1", "github.com/acme/open"));
+    const { slug: secret } = await withRepos(
+      { "acme/secret": { full_name: "acme/secret", private: true, push: true } },
+      () => create("s2", "github.com/acme/secret"),
+    );
+
+    expect((await t.query(api.shares.view, { slug: open })).status).toBe("ok");
+    expect((await t.query(api.shares.view, { slug: secret })).status).toBe("login_required");
+    expect(await t.query(api.shares.view, { slug: secret, token: reader })).toMatchObject({
+      status: "forbidden", stale: { memberships: false, repos: ["acme/secret"] },
+    });
+    expect((await t.query(api.shares.repoShares, { repo: "acme/secret", token: reader })).stale.repos).toEqual(["acme/secret"]);
+
+    // Each viewer asks GitHub with their own token.
+    const answers = (pull: boolean) => ({ "acme/secret": { full_name: "acme/secret", private: true, pull } });
+    await withRepos(answers(true), () => t.action(api.access.refresh, { token: reader, memberships: false, repos: ["acme/secret"] }));
+    await withRepos(answers(false), () => t.action(api.access.refresh, { token: outsider, memberships: false, repos: ["acme/secret"] }));
+    expect((await t.query(api.shares.view, { slug: secret, token: reader })).status).toBe("ok");
+    const denied = await t.query(api.shares.view, { slug: secret, token: outsider });
+    expect(denied.status).toBe("forbidden");
+    expect(denied.status === "forbidden" && denied.stale).toBeUndefined();
+    expect((await t.query(api.shares.repoShares, { repo: "acme/secret", token: reader })).shares).toHaveLength(1);
+    expect((await t.query(api.shares.repoShares, { repo: "acme/secret", token: outsider })).shares).toEqual([]);
+  });
+});
+
+describe("instance policy", () => {
+  test("disallowed grants are rejected on write and ignored on read", async () => {
+    const { t, owner, slug } = await setup(LINK_ACCESS);
+    await withEnv({ OPTICON_SHARE_GRANTS: "repo,people" }, async () => {
+      expect(await t.query(api.instance.policy, {})).toMatchObject({ grants: ["people", "repo"], defaultAccess: { ...PRIVATE_ACCESS, repo: true } });
+      await expect(
+        t.action(api.shares.create, { token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s2", access: LINK_ACCESS }),
+      ).rejects.toThrow(/grant_not_allowed/);
+      expect((await t.query(api.shares.view, { slug })).status).toBe("login_required");
+      expect((await t.query(api.shares.view, { slug, token: owner })).status).toBe("ok");
+    });
+    expect((await t.query(api.shares.view, { slug })).status).toBe("ok");
+  });
+
+  test("closed to signed-out visitors: link shares need sign-in, and there are no badges", async () => {
+    const { t, slug } = await setup(LINK_ACCESS);
+    const viewer = await signIn(t, "viewer");
+    await withEnv({ OPTICON_ANONYMOUS: "0" }, async () => {
+      expect((await t.query(api.shares.view, { slug })).status).toBe("login_required");
+      expect((await t.query(api.shares.view, { slug, token: viewer })).status).toBe("ok");
+      expect(await t.query(api.shares.profile, { login: "owner" })).toBeNull();
+      expect((await t.fetch("/badge/gh/acme/app.svg")).status).toBe(404);
+    });
+  });
+
+  test("sign-in is limited to confirmed members of allowed orgs, and lapses", async () => {
+    const t = convexTest(schema, modules);
+    const member = await signIn(t, "member", { memberOf: "acme", memberVerifiedAt: Date.now(), memberCheckedAt: 0, githubToken: "gh-member" });
+    const lapsed = await signIn(t, "lapsed-member", { memberOf: "acme", memberVerifiedAt: 1 });
+    const other = await signIn(t, "other", { memberOf: "beta", memberVerifiedAt: Date.now() });
+    const leaver = await signIn(t, "leaver", { memberOf: "acme", memberVerifiedAt: Date.now(), memberCheckedAt: 0, githubToken: "gh-leaver" });
+    await withEnv({ OPTICON_ALLOWED_ORGS: "acme" }, async () => {
+      expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
+      expect(await t.query(api.auth.me, { token: lapsed })).toBeNull();
+      expect(await t.query(api.auth.me, { token: other })).toBeNull();
+
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        const auth = (init?.headers as Record<string, string>).authorization;
+        return auth === "Bearer gh-member" ? Response.json({ state: "active" }) : new Response("Not Found", { status: 404 });
+      }) as typeof fetch;
+      try {
+        await t.action(internal.access.recheckMembers, {});
+        // A rate-limited check is no answer: nobody is signed out for it.
+        await t.run(async (ctx) => {
+          for (const u of await ctx.db.query("users").collect()) await ctx.db.patch(u._id, { memberCheckedAt: 0 });
+        });
+        globalThis.fetch = (async () => new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } })) as unknown as typeof fetch;
+        await t.action(internal.access.recheckMembers, {});
+      } finally {
+        globalThis.fetch = original;
+      }
+      expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
+      expect(await t.query(api.auth.me, { token: leaver })).toBeNull();
+      const leaverId = (await t.run((ctx) => ctx.db.query("users").withIndex("by_login", (q) => q.eq("login", "leaver")).unique()))!._id;
+      expect(await t.run((ctx) => ctx.db.query("tokens").withIndex("by_user", (q) => q.eq("userId", leaverId)).collect())).toEqual([]);
+    });
+    // Without the limit, anyone still signed in is let in; the recheck signed out everyone it couldn't confirm.
+    expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
+    expect(await t.query(api.auth.me, { token: lapsed })).toBeNull();
   });
 });
 
@@ -349,13 +494,13 @@ describe("GitHub token refresh", () => {
       return Response.json(url.includes("/teams") ? [{ slug: "platform", organization: { login: "Acme" } }] : [{ login: "Acme" }]);
     }) as typeof fetch;
     try {
-      expect(await t.action(api.access.refreshMemberships, { token })).toEqual({ orgs: ["acme"], teams: ["acme/platform"] });
+      expect(await t.action(api.access.refresh, { token, memberships: true, repos: [] })).toEqual({ orgs: ["acme"], teams: ["acme/platform"] });
       const user = await t.run((ctx) => ctx.db.query("users").first());
       expect(user).toMatchObject({ githubToken: "fresh", githubRefreshToken: "refresh-new" });
       expect(user?.githubRefreshUntil).toBeUndefined();
       expect(user?.githubTokenExpiresAt).toBeGreaterThan(Date.now());
       expect(requests).toHaveLength(3);
-      await t.action(api.access.refreshMemberships, { token });
+      await t.action(api.access.refresh, { token, memberships: true, repos: [] });
       expect(requests.filter((url) => url.includes("access_token"))).toHaveLength(1);
     } finally { globalThis.fetch = original; }
   });
@@ -369,7 +514,7 @@ describe("GitHub token refresh", () => {
     const original = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({ error: "bad_refresh_token" })) as unknown as typeof fetch;
     try {
-      expect(await t.action(api.access.refreshMemberships, { token })).toBeNull();
+      expect(await t.action(api.access.refresh, { token, memberships: true, repos: [] })).toBeNull();
       expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({
         orgs: ["acme"], membershipCheckedAt: 123, githubToken: "expired",
       });
@@ -397,36 +542,17 @@ describe("GitHub token refresh", () => {
     globalThis.fetch = (async (input: string | URL | Request) => String(input).includes("/teams")
       ? new Response("Unavailable", { status: 503 }) : Response.json([{ login: "Other" }])) as typeof fetch;
     try {
-      await expect(t.action(api.access.refreshMemberships, { token })).rejects.toThrow(/503/);
+      await expect(t.action(api.access.refresh, { token, memberships: true, repos: [] })).rejects.toThrow(/503/);
       expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({ orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
     } finally { globalThis.fetch = original; }
   });
 });
 
 describe("repo pages", () => {
-  /** Stubs GET /repos/:owner/:name; `repos` maps the requested path to GitHub's answer. */
-  async function withGithub<R>(repos: Record<string, { full_name: string; private?: boolean; push?: boolean } | number>, run: (calls: string[]) => Promise<R>) {
-    const calls: string[] = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = (async (input: string | URL | Request) => {
-      const path = String(input).replace("https://api.github.com/repos/", "");
-      calls.push(path);
-      const repo = repos[path];
-      if (repo === undefined) return new Response("Not Found", { status: 404 });
-      if (typeof repo === "number") return new Response("", { status: repo });
-      return Response.json({ full_name: repo.full_name, private: repo.private ?? false, permissions: { push: repo.push ?? false } });
-    }) as unknown as typeof fetch;
-    try {
-      return await run(calls);
-    } finally {
-      globalThis.fetch = original;
-    }
-  }
-
   async function share(t: T, token: string, sessionId: string, repo?: string) {
     return t.action(api.shares.create, {
       token, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, title: sessionId, project: "opticon",
-      repo, access: LINK_ACCESS, discoverable: true,
+      repo, access: LINK_ACCESS, listed: true,
     });
   }
 
@@ -434,62 +560,62 @@ describe("repo pages", () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
     const outsider = await signIn(t, "outsider", { githubToken: "gh-outsider" });
-    await withGithub({ "acme/app": { full_name: "Acme/App", push: true } }, async () => {
+    await withRepos({ "acme/app": { full_name: "Acme/App", push: true } }, async () => {
       await share(t, owner, "s1", "github.com/Acme/App");
     });
-    await withGithub({ "acme/app": { full_name: "Acme/App", push: false } }, async () => {
+    await withRepos({ "acme/app": { full_name: "Acme/App", push: false } }, async () => {
       await share(t, outsider, "s2", "github.com/acme/app");
     });
-    const listed = await t.query(api.shares.repoShares, { repo: "acme/app" });
+    const { shares: listed } = await t.query(api.shares.repoShares, { repo: "acme/app" });
     expect(listed.map((s) => [s.title, s.repo, s.owner?.login])).toEqual([["s1", "acme/app", "owner"]]);
   });
 
-  test("private repos, non-GitHub remotes, and users without a token are never linked", async () => {
+  test("private repos are linked with their visibility; non-GitHub remotes and tokenless users never are", async () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
     const tokenless = await signIn(t, "tokenless");
-    await withGithub({ "acme/secret": { full_name: "acme/secret", private: true, push: true }, "acme/app": { full_name: "acme/app", push: true } }, async (calls) => {
+    await withRepos({ "acme/secret": { full_name: "acme/secret", private: true, push: true }, "acme/app": { full_name: "acme/app", push: true } }, async (calls) => {
       await share(t, owner, "s1", "github.com/acme/secret");
       await share(t, owner, "s2", "gitlab.com/acme/app");
       await share(t, tokenless, "s3", "github.com/acme/app");
       expect(calls).toEqual(["acme/secret"]);
     });
     const repos = await t.run(async (ctx) => (await ctx.db.query("shares").collect()).map((s) => s.repo ?? null));
-    expect(repos).toEqual([null, null, null]);
-    expect(await t.run((ctx) => ctx.db.query("repoAccess").collect())).toEqual([]);
+    expect(repos).toEqual(["acme/secret", null, null]);
+    expect(await t.run((ctx) => ctx.db.query("repoVisibility").collect())).toMatchObject([{ repo: "acme/secret", private: true }]);
   });
 
   test("grants are cached, renames resolve to the canonical repo, and GitHub outages change nothing", async () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
-    await withGithub({ "old/name": { full_name: "new/name", push: true }, "new/name": { full_name: "new/name", push: true } }, async (calls) => {
+    await withRepos({ "old/name": { full_name: "new/name", push: true }, "new/name": { full_name: "new/name", push: true } }, async (calls) => {
       const { shareId } = await share(t, owner, "s1", "github.com/old/name");
       expect(await t.run(async (ctx) => (await ctx.db.get(shareId))?.repo)).toBe("new/name");
       await share(t, owner, "s2", "github.com/new/name");
       expect(calls).toEqual(["old/name"]);
     });
-    await withGithub({ "other/repo": 502 }, async () => {
+    await withRepos({ "other/repo": 502 }, async () => {
       // Re-sharing during an outage keeps the existing link (and bumps the share to the top).
       await share(t, owner, "s1", "github.com/other/repo");
     });
-    expect((await t.query(api.shares.repoShares, { repo: "new/name" })).map((s) => s.title)).toEqual(["s1", "s2"]);
+    expect((await t.query(api.shares.repoShares, { repo: "new/name" })).shares.map((s) => s.title)).toEqual(["s1", "s2"]);
   });
 
   test("the recheck unlists shares when push access is lost and follows renames", async () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
-    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
+    await withRepos({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
       await share(t, owner, "s1", "github.com/acme/app");
       await share(t, owner, "s2", "github.com/acme/lib");
     });
     await t.run(async (ctx) => {
       for (const g of await ctx.db.query("repoAccess").collect()) await ctx.db.patch(g._id, { checkedAt: 0 });
     });
-    await withGithub({ "acme/app": { full_name: "acme/app", push: false }, "acme/lib": { full_name: "acme/library", push: true } }, async () => {
+    await withRepos({ "acme/app": { full_name: "acme/app", push: false }, "acme/lib": { full_name: "acme/library", push: true } }, async () => {
       await t.action(internal.repos.recheck, {});
     });
-    expect(await t.query(api.shares.repoShares, { repo: "acme/app" })).toEqual([]);
-    expect((await t.query(api.shares.repoShares, { repo: "acme/library" })).map((s) => s.title)).toEqual(["s2"]);
+    expect((await t.query(api.shares.repoShares, { repo: "acme/app" })).shares).toEqual([]);
+    expect((await t.query(api.shares.repoShares, { repo: "acme/library" })).shares.map((s) => s.title)).toEqual(["s2"]);
     expect((await t.run((ctx) => ctx.db.query("repoAccess").collect())).map((g) => g.repo)).toEqual(["acme/library"]);
   });
 
@@ -497,13 +623,13 @@ describe("repo pages", () => {
     const t = convexTest(schema, modules);
     const alice = await signIn(t, "alice", { githubToken: "gh-alice" });
     const bob = await signIn(t, "bob", { githubToken: "gh-bob" });
-    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
+    await withRepos({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
       await share(t, alice, "a1", "github.com/acme/app");
       await share(t, bob, "b1", "github.com/acme/app");
       await share(t, alice, "a2", "github.com/acme/lib");
     });
     await share(t, alice, "a3");
-    const active = await t.query(api.shares.activeRepos, {});
+    const { repos: active } = await t.query(api.shares.activeRepos, {});
     expect(active.map((r) => [r.repo, r.sessions, r.contributors.map((c) => c.login).sort()])).toEqual([
       ["acme/app", 2, ["alice", "bob"]],
       ["acme/lib", 1, ["alice"]],
@@ -528,20 +654,20 @@ describe("repo pages", () => {
     const { shareId } = await share(t, owner, "s1");
     const claim = (token: string, repo: string) =>
       t.action(api.shares.claimRepo, { token, protocol: PROTOCOL_VERSION, shareId, repo, project: "app" });
-    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/secret": { full_name: "acme/secret", private: true, push: true } }, async () => {
-      expect(await claim(owner, "github.com/acme/secret")).toEqual({ repo: null });
+    await withRepos({ "acme/app": { full_name: "acme/app", push: true }, "acme/fork": { full_name: "acme/fork" } }, async () => {
+      expect(await claim(owner, "github.com/acme/fork")).toEqual({ repo: null });
       await expect(claim(mallory, "github.com/acme/app")).rejects.toThrow();
       expect(await claim(owner, "github.com/acme/app")).toEqual({ repo: "acme/app" });
     });
-    expect((await t.query(api.shares.repoShares, { repo: "acme/app" })).map((s) => [s.title, s.project])).toEqual([["s1", "app"]]);
+    expect((await t.query(api.shares.repoShares, { repo: "acme/app" })).shares.map((s) => [s.title, s.project])).toEqual([["s1", "app"]]);
   });
 
-  test("a user's project page lists their discoverable shares in that project", async () => {
+  test("a user's project page lists their listed shares in that project", async () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner");
     await share(t, owner, "s1");
     await t.action(api.shares.create, {
-      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s2", project: "other", access: LINK_ACCESS, discoverable: true,
+      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s2", project: "other", access: LINK_ACCESS, listed: true,
     });
     await t.action(api.shares.create, {
       token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s3", project: "opticon", access: LINK_ACCESS,

@@ -22,13 +22,13 @@ export interface MyShare {
   sessionId: string;
   title?: string;
   project?: string;
-  /** Verified public GitHub repo, `owner/name`. */
+  /** Verified GitHub repo, `owner/name`. */
   repo?: string;
   access: ShareAccess;
   /** Created by autosync. */
   auto: boolean;
-  /** Listed on the owner's profile and the public feed. */
-  discoverable: boolean;
+  /** Shown on the owner's profile, its repo page, and the feed, to viewers who can open it. */
+  listed: boolean;
   eventCount: number;
   viewers: number;
 }
@@ -128,9 +128,9 @@ export async function fetchSharePreview(key: string): Promise<SharePreview> {
   return res.json();
 }
 
-/** `discoverable` lists the share on your profile and the public feed; link shares only. */
-export const createShare = (key: string, access: ShareAccess, discoverable: boolean) =>
-  send<{ slug: string; url: string }>("POST", `/api/sessions/${key}/share`, { access, discoverable });
+/** `listed` shows the share on your profile, its repo page, and the feed, to viewers who can open it. */
+export const createShare = (key: string, access: ShareAccess, listed: boolean) =>
+  send<{ slug: string; url: string }>("POST", `/api/sessions/${key}/share`, { access, listed });
 /** Deletes the server copy. Auto sync won't re-create it. */
 export const deleteShare = (shareId: string) => send("DELETE", `/api/shares/${shareId}`);
 /** Makes the share private; the copy stays and keeps syncing. */
@@ -142,7 +142,7 @@ export async function fetchAutosync(key: string): Promise<AutosyncState> {
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
   return data as AutosyncState;
 }
-/** Syncs every session in this one's project, public and discoverable. */
+/** Syncs every session in this one's project, listed, with the instance's default access. */
 export const enableAutosync = (key: string) => send<AutosyncState>("POST", `/api/sessions/${key}/autosync`);
 export const disableAutosync = (key: string) => send<AutosyncState>("DELETE", `/api/sessions/${key}/autosync`);
 

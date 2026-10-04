@@ -1,3 +1,6 @@
+import type { ShareAccess } from "@opticon/core";
+import { api } from "@opticon/server/api";
+import { ConvexHttpClient } from "convex/browser";
 import { chmod, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -21,6 +24,13 @@ export function endpoints(): Endpoints | undefined {
   const siteUrl = process.env.OPTICON_CONVEX_SITE_URL ?? (dev ? "http://127.0.0.1:3311" : "https://bold-ostrich-850.convex.site");
   const webUrl = process.env.OPTICON_WEB_URL ?? (dev ? "http://127.0.0.1:4747" : "https://opticon.tv");
   return convexUrl && siteUrl ? { convexUrl, siteUrl, webUrl } : undefined;
+}
+
+/** The access new shares and autosync rules start with on this instance. */
+export async function defaultAccess(): Promise<ShareAccess> {
+  const ep = endpoints();
+  if (!ep) throw new Error("Sharing isn't configured for this build.");
+  return (await new ConvexHttpClient(ep.convexUrl).query(api.instance.policy, {})).defaultAccess;
 }
 
 export interface Auth {

@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
-import { decideAccess, requireUser } from "./lib";
+import { canView, requireUser, viewChecker } from "./lib";
 import { shareBySlug, viewerCount } from "./shares";
 
 const LIST_LIMIT = 200;
@@ -25,7 +25,7 @@ export const setFollowing = mutation({
     const user = await requireUser(ctx, token);
     const share = await shareBySlug(ctx, slug);
     if (!share) throw new ConvexError({ code: "not_found" });
-    if (!decideAccess(share.access, share.ownerId, user).ok) throw new ConvexError({ code: "forbidden" });
+    if (!(await canView(ctx, share, user)).ok) throw new ConvexError({ code: "forbidden" });
     if (share.ownerId === user._id) return;
     const existing = await followRow(ctx, user._id, share._id);
     if (existing) await ctx.db.patch(existing._id, { following });
@@ -46,9 +46,10 @@ export const list = query({
       .withIndex("by_user_following", (q) => q.eq("userId", user._id).eq("following", true))
       .order("desc")
       .take(LIST_LIMIT);
+    const checker = viewChecker(ctx, user);
     const followed = await Promise.all(
       rows.map(async (row) => {
-        const summary = await shareSummary(ctx, await ctx.db.get(row.shareId), user);
+        const summary = await shareSummary(ctx, await ctx.db.get(row.shareId), checker);
         if (!summary) return null;
         const unread = summary.available ? Math.max(0, summary.eventCount - (row.seenEventCount ?? summary.eventCount)) : 0;
         return { ...summary, lastViewedAt: row.lastViewedAt, unread };
@@ -60,12 +61,13 @@ export const list = query({
 
 /**
  * Current details for a signed-out viewer's browser-stored history, checked as a signed-out
- * viewer: only link shares are available. Removed shares are left out.
+ * viewer: only shares anyone can open are available. Removed shares are left out.
  */
 export const resolve = query({
   args: { slugs: v.array(v.string()) },
   handler: async (ctx, { slugs }) => {
-    const resolved = await Promise.all(slugs.slice(0, LIST_LIMIT).map(async (slug) => shareSummary(ctx, await shareBySlug(ctx, slug), null)));
+    const checker = viewChecker(ctx, null);
+    const resolved = await Promise.all(slugs.slice(0, LIST_LIMIT).map(async (slug) => shareSummary(ctx, await shareBySlug(ctx, slug), checker)));
     return resolved.filter((s) => s !== null);
   },
 });
@@ -82,7 +84,7 @@ export const importLocal = mutation({
     const user = await requireUser(ctx, token);
     for (const entry of entries.slice(0, LIST_LIMIT)) {
       const share = await shareBySlug(ctx, entry.slug);
-      if (!share || share.ownerId === user._id || !decideAccess(share.access, share.ownerId, user).ok) continue;
+      if (!share || share.ownerId === user._id || !(await canView(ctx, share, user)).ok) continue;
       const existing = await followRow(ctx, user._id, share._id);
       const lastViewedAt = Math.min(entry.lastViewedAt, Date.now());
       if (!existing) {
@@ -100,9 +102,9 @@ export const importLocal = mutation({
   },
 });
 
-async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, viewer: Doc<"users"> | null) {
+async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, checker: ReturnType<typeof viewChecker>) {
   if (!share || share.deletedAt !== undefined) return null;
-  if (!decideAccess(share.access, share.ownerId, viewer).ok) return { slug: share.slug, available: false as const };
+  if (!(await checker.decide(share)).ok) return { slug: share.slug, available: false as const };
   const owner = await ctx.db.get(share.ownerId);
   return {
     slug: share.slug,
