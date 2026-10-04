@@ -12,8 +12,8 @@ import {
 import { api } from "@opticon/server/api";
 import { ConvexClient } from "convex/browser";
 import type { FunctionReturnType } from "convex/server";
-import { AUTH_FILE, type Auth, endpoints, readAuth } from "../account";
-import { AUTOSYNC_FILE, type AutosyncRule, matches, readRules, repoOf } from "../autosync";
+import { AUTH_FILE, type Auth, INSTANCES_FILE, currentInstance, endpoints, readAuth } from "../account";
+import { AUTOSYNC_FILE, type AutosyncRule, currentRules, matches, repoOf } from "../autosync";
 import { OPTICON_HOME } from "../paths";
 import { type ListChange, type SessionKey, type SessionMessage, type SessionStore, keyOf } from "./store";
 
@@ -27,6 +27,9 @@ type Demand = FunctionReturnType<typeof api.shares.liveDemand>;
 
 export interface AccountState {
   configured: boolean;
+  /** The selected instance's name and backend. The local app reloads when the backend changes. */
+  instance?: string;
+  convexUrl?: string;
   signedIn: boolean;
   login?: string;
   liveSync: boolean;
@@ -65,18 +68,20 @@ export class ShareSync {
   private claimQueue: Promise<void> = Promise.resolve();
   rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
-  account: AccountState = { configured: !!endpoints(), signedIn: false, liveSync: true, webUrl: endpoints()?.webUrl };
+  account: AccountState = { configured: true, signedIn: false, liveSync: true, webUrl: endpoints().webUrl };
 
   constructor(private readonly store: SessionStore) {}
 
   async start(): Promise<void> {
-    this.rules = await readRules();
+    this.rules = await currentRules();
     await this.connect();
     // `opticon login` / `logout` rewrite auth.json; reconnect when that happens.
     // `opticon autosync` edits autosync.json; pick up the new rules.
+    // `opticon instance` selects another server: reconnect, and switch to its rules.
     this.authWatcher = watch(OPTICON_HOME, (_event, name) => {
       if (name === basename(AUTH_FILE)) void this.connect();
       if (name === basename(AUTOSYNC_FILE)) void this.reloadRules();
+      if (name === basename(INSTANCES_FILE)) void this.reloadRules().then(() => this.connect());
     });
     this.offList = this.store.onList((change) => this.onSessions(change));
   }
@@ -185,8 +190,10 @@ export class ShareSync {
     this.disconnect();
     const ep = endpoints();
     this.auth = await readAuth();
-    this.account = { configured: !!ep, signedIn: false, liveSync: true, webUrl: ep?.webUrl };
-    if (!ep || !this.auth) return this.emit();
+    this.account = {
+      configured: true, instance: currentInstance().name, convexUrl: ep.convexUrl, signedIn: false, liveSync: true, webUrl: ep.webUrl,
+    };
+    if (!this.auth) return this.emit();
     const { token } = this.auth;
     const client = new ConvexClient(ep.convexUrl);
     this.client = client;
@@ -250,7 +257,7 @@ export class ShareSync {
   // --- autosync -------------------------------------------------------------
 
   async reloadRules(): Promise<void> {
-    this.rules = await readRules();
+    this.rules = await currentRules();
     this.emit();
   }
 

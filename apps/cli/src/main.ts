@@ -14,8 +14,19 @@ import {
 } from "@opticon/core";
 import { api } from "@opticon/server/api";
 import { ConvexHttpClient } from "convex/browser";
-import { clearAuth, defaultAccess, endpoints, login, readAuth } from "./account";
-import { addRule, describeRule, newRule, readRules, removeRule, ruleTarget } from "./autosync";
+import {
+  clearAuth,
+  currentInstance,
+  defaultAccess,
+  endpoints,
+  instanceOverridden,
+  instances,
+  login,
+  readAuth,
+  removeInstance,
+  selectInstance,
+} from "./account";
+import { addRule, currentRules, describeRule, newRule, removeInstanceRules, removeRule, ruleTarget } from "./autosync";
 import { VERSION, ensureDaemon, localToken, runDaemon, stopDaemon } from "./daemon/lifecycle";
 import { DEFAULT_TAILSCALE_PORT, serveOnTailnet, stopServing } from "./tailscale";
 import { update } from "./update";
@@ -30,6 +41,9 @@ Usage:
   opticon login                    Sign in with GitHub to share sessions
   opticon logout                   Sign out on this machine
   opticon whoami                   Show who you're signed in as
+  opticon instance                 Show the Opticon servers you use; every other command uses the selected one
+  opticon instance <url|name>      Select a server, adding it if it's new (e.g. opticon.acme.dev)
+  opticon instance remove <name>   Forget a server and this machine's sign-in to it
   opticon autosync [dir] [--yes]   Sync this project's sessions (matched by git remote, else by
                                    directory) and list them with the default access
   opticon autosync off [dir]       Stop autosyncing this project
@@ -52,22 +66,32 @@ switch (command) {
     break;
   case "login": {
     const auth = await login(openUrl);
-    console.log(`Signed in as ${auth.login}.`);
+    console.log(`Signed in to ${currentInstance().name} as ${auth.login}.`);
     break;
   }
+  case "instance":
+    await instance().catch((error: Error) => {
+      console.error(error.message);
+      process.exit(1);
+    });
+    break;
   case "logout": {
     const auth = await readAuth();
     const ep = endpoints();
     if (auth && ep) await new ConvexHttpClient(ep.convexUrl).mutation(api.auth.logout, { token: auth.token }).catch(() => {});
     await clearAuth();
-    console.log(auth ? "Signed out." : "Not signed in.");
+    console.log(auth ? `Signed out of ${currentInstance().name}.` : `Not signed in to ${currentInstance().name}.`);
     break;
   }
   case "whoami": {
     const auth = await readAuth();
     const ep = endpoints();
     const me = auth && ep ? await new ConvexHttpClient(ep.convexUrl).query(api.auth.me, { token: auth.token }).catch(() => null) : null;
-    console.log(me ? `${me.login}${me.liveSync ? "" : " (live sync off)"}` : "Not signed in. Run `opticon login`.");
+    console.log(
+      me
+        ? `${me.login} on ${currentInstance().name}${me.liveSync ? "" : " (live sync off)"}`
+        : `Not signed in to ${currentInstance().name}. Run \`opticon login\`.`,
+    );
     break;
   }
   case "live-sync": {
@@ -157,13 +181,41 @@ async function liveSync(value: string | undefined) {
   );
 }
 
-/** Rules live in ~/.opticon/autosync.json; the daemon watches that file. */
+/**
+ * Instances live in ~/.opticon/instances.json. The daemon watches it: selecting another instance
+ * reconnects it there and switches to that instance's autosync rules.
+ */
+async function instance() {
+  const [sub, name] = args;
+  if (sub === "remove") {
+    const removed = await removeInstance(requireArg(name));
+    const rules = await removeInstanceRules(removed.convexUrl);
+    console.log(`Removed ${removed.name}${rules ? ` and its ${rules} autosync rule${rules === 1 ? "" : "s"}` : ""}. Using ${currentInstance().name}.`);
+    return;
+  }
+  if (sub) {
+    const { instance, added } = await selectInstance(sub);
+    const auth = await readAuth(instance.convexUrl);
+    console.log(`${added ? "Added and selected" : "Selected"} ${instance.name} (${instance.webUrl}).`);
+    console.log(auth ? `Signed in as ${auth.login}.` : "Not signed in there yet: run `opticon login`.");
+    if (instanceOverridden()) console.log("Note: OPTICON_DEV or OPTICON_*_URL is set, which overrides the selection.");
+    return;
+  }
+  const current = currentInstance();
+  for (const i of instances()) {
+    const auth = await readAuth(i.convexUrl);
+    console.log(`${i.name === current.name ? "*" : " "} ${i.name.padEnd(28)} ${auth ? auth.login : "(not signed in)"}`);
+  }
+  if (instanceOverridden()) console.log(`\nOPTICON_DEV or OPTICON_*_URL is set: using ${endpoints().webUrl}.`);
+}
+
+/** Rules live in ~/.opticon/autosync.json; the daemon watches that file. Each belongs to one instance. */
 async function autosync() {
   const [sub, dir] = args[0] === "off" || args[0] === "list" ? [args[0], args[1]] : [undefined, args[0]];
   const target = dir && !dir.startsWith("--") ? dir : process.cwd();
   if (sub === "list") {
-    const rules = await readRules();
-    if (!rules.length) console.log("No autosynced projects. Add one with `opticon autosync [dir]`.");
+    const rules = await currentRules();
+    if (!rules.length) console.log(`No autosynced projects on ${currentInstance().name}. Add one with \`opticon autosync [dir]\`.`);
     for (const r of rules) console.log(describeRule(r));
     return;
   }
@@ -174,7 +226,7 @@ async function autosync() {
   }
   const rule = await newRule(target, await defaultAccess());
   const who = describeAccess(rule.share ?? PRIVATE_ACCESS).toLowerCase();
-  const question = `This will sync all of your sessions in ${describeRule(rule)} and list them for ${who}.`;
+  const question = `This will sync all of your sessions in ${describeRule(rule)} to ${currentInstance().name} and list them for ${who}.`;
   if (!args.includes("--yes")) {
     if (!process.stdin.isTTY) {
       console.error(`${question}\nRe-run with --yes to confirm.`);
@@ -186,9 +238,9 @@ async function autosync() {
   await addRule(rule);
   const auth = await readAuth();
   console.log(`Autosyncing ${describeRule(rule)}. Sessions active from now on are uploaded as they change.`);
-  if (auth) console.log(`They'll be listed at ${endpoints()?.webUrl}/u/${auth.login} for ${who}. Unshare or delete any of them from My shares.`);
+  if (auth) console.log(`They'll be listed at ${endpoints().webUrl}/u/${auth.login} for ${who}. Unshare or delete any of them from My shares.`);
   const repo = rule.repo?.startsWith("github.com/") ? rule.repo.slice("github.com/".length) : undefined;
-  if (auth && repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints()?.webUrl}/gh/${repo}.`);
+  if (auth && repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints().webUrl}/gh/${repo}.`);
   else console.log("Not signed in yet: run `opticon login`.");
   // The daemon does the syncing.
   await ensureDaemon();

@@ -1,6 +1,7 @@
 import type { ShareAccess } from "@opticon/core";
 import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { DEFAULT_INSTANCE, endpoints } from "./account";
 import { OPTICON_HOME } from "./paths";
 
 export const AUTOSYNC_FILE = join(OPTICON_HOME, "autosync.json");
@@ -12,6 +13,11 @@ export const AUTOSYNC_FILE = join(OPTICON_HOME, "autosync.json");
  * default access.
  */
 export interface AutosyncRule {
+  /**
+   * The backend (Convex URL) the rule uploads to. Rules only run while their instance is
+   * selected, so switching instances never sends one instance's projects to another.
+   */
+  instance: string;
   /** Normalized origin remote, e.g. `github.com/rt2zz/opticon`. */
   repo?: string;
   /** Absolute directory; matches it and everything below. Used when there's no remote. */
@@ -32,8 +38,18 @@ export async function readRules(): Promise<AutosyncRule[]> {
   return (data?.rules ?? []).map(upgradeRule);
 }
 
-/** Rules written before access had `link` and `repo`, and `discoverable` became `listed`. */
-type StoredRule = Omit<AutosyncRule, "share"> & {
+/** Rules for the selected instance. */
+export async function currentRules(): Promise<AutosyncRule[]> {
+  const instance = endpoints().convexUrl;
+  return (await readRules()).filter((r) => r.instance === instance);
+}
+
+/**
+ * Rules written before instances (always opticon.tv), before access had `link` and `repo`, and
+ * before `discoverable` became `listed`.
+ */
+type StoredRule = Omit<AutosyncRule, "share" | "instance"> & {
+  instance?: string;
   share?: ShareAccess & { anyone?: boolean };
   discoverable?: boolean;
 };
@@ -41,19 +57,21 @@ type StoredRule = Omit<AutosyncRule, "share"> & {
 function upgradeRule({ discoverable, ...rule }: StoredRule): AutosyncRule {
   const share = rule.share && { ...rule.share, link: rule.share.link ?? rule.share.anyone ?? false, repo: rule.share.repo ?? false };
   if (share) delete share.anyone;
-  return { ...rule, share, listed: rule.listed ?? discoverable };
+  return { ...rule, instance: rule.instance ?? DEFAULT_INSTANCE.convexUrl, share, listed: rule.listed ?? discoverable };
 }
 
 export async function writeRules(rules: AutosyncRule[]): Promise<void> {
   await Bun.write(AUTOSYNC_FILE, `${JSON.stringify({ rules }, null, 2)}\n`);
 }
 
-/** What a rule for `dir` matches: its remote when it has one, else its path. */
-export async function ruleTarget(dir: string): Promise<Pick<AutosyncRule, "repo" | "path">> {
+type RuleTarget = Pick<AutosyncRule, "instance" | "repo" | "path">;
+
+/** What a rule for `dir` on the selected instance matches: its remote when it has one, else its path. */
+export async function ruleTarget(dir: string): Promise<RuleTarget> {
   // Session cwds are real paths (e.g. /private/tmp on macOS, not /tmp).
   const path = await realpath(resolve(dir)).catch(() => resolve(dir));
   const repo = await repoOf(path);
-  return repo ? { repo } : { path };
+  return { instance: endpoints().convexUrl, ...(repo ? { repo } : { path }) };
 }
 
 /** A listed rule for `dir` that shares with `access`. */
@@ -61,7 +79,7 @@ export async function newRule(dir: string, access: ShareAccess): Promise<Autosyn
   return { ...(await ruleTarget(dir)), sync: true, share: access, listed: true, since: new Date().toISOString() };
 }
 
-/** Adds or replaces the rule for the same repo or path. */
+/** Adds or replaces the rule for the same instance and repo or path. */
 export async function addRule(rule: AutosyncRule): Promise<AutosyncRule[]> {
   const rules = (await readRules()).filter((r) => !sameTarget(r, rule));
   rules.push(rule);
@@ -69,7 +87,7 @@ export async function addRule(rule: AutosyncRule): Promise<AutosyncRule[]> {
   return rules;
 }
 
-export async function removeRule(rule: Pick<AutosyncRule, "repo" | "path">): Promise<boolean> {
+export async function removeRule(rule: RuleTarget): Promise<boolean> {
   const rules = await readRules();
   const kept = rules.filter((r) => !sameTarget(r, rule));
   await writeRules(kept);
@@ -78,8 +96,16 @@ export async function removeRule(rule: Pick<AutosyncRule, "repo" | "path">): Pro
 
 export const describeRule = (rule: Pick<AutosyncRule, "repo" | "path">) => rule.repo ?? rule.path ?? "?";
 
-function sameTarget(a: Pick<AutosyncRule, "repo" | "path">, b: Pick<AutosyncRule, "repo" | "path">): boolean {
-  return a.repo === b.repo && a.path === b.path;
+function sameTarget(a: RuleTarget, b: RuleTarget): boolean {
+  return a.instance === b.instance && a.repo === b.repo && a.path === b.path;
+}
+
+/** Drops every rule for an instance, e.g. when it's removed. Returns how many there were. */
+export async function removeInstanceRules(instance: string): Promise<number> {
+  const rules = await readRules();
+  const kept = rules.filter((r) => r.instance !== instance);
+  if (kept.length !== rules.length) await writeRules(kept);
+  return rules.length - kept.length;
 }
 
 /** Whether a session's working directory falls under `rule`. `repo` is the cwd's remote, if any. */

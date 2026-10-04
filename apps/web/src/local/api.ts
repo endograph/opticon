@@ -1,5 +1,6 @@
 import type { SessionEvent, SessionMeta, ShareAccess, SharedSessionProjection } from "@opticon/core";
 import { useEffect, useRef, useState } from "react";
+import { config } from "../config";
 
 export type Status = "loading" | "ready" | "unauthorized" | "offline" | "missing";
 
@@ -7,6 +8,9 @@ export const sessionKey = (m: Pick<SessionMeta, "provider" | "id">) => `${m.prov
 
 export interface Account {
   configured: boolean;
+  /** The selected instance (`opticon instance`) and its backend. */
+  instance?: string;
+  convexUrl?: string;
   signedIn: boolean;
   login?: string;
   liveSync: boolean;
@@ -61,7 +65,11 @@ export function useDaemonState(): Daemon {
   useEffect(() => {
     return subscribe<ListMessage>("/api/sessions/stream", "/api/sessions", setStatus, (message) => {
       if (message.type === "list") return setSessions(message.sessions);
-      if (message.type === "shares") return setSharing({ account: message.account, shares: message.shares });
+      if (message.type === "shares") {
+        // `opticon instance` switched servers; this page's Convex client points at the old one.
+        if (message.account.convexUrl && message.account.convexUrl !== config.convexUrl) return location.reload();
+        return setSharing({ account: message.account, shares: message.shares });
+      }
       setSessions((current) => {
         const byKey = new Map(current.map((s) => [sessionKey(s), s]));
         for (const s of message.upserted) byKey.set(sessionKey(s), s);

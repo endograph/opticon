@@ -83,7 +83,7 @@ test("autosync creates shares with the rule's access, refreshes existing ones, a
   internals.auth = { token: "t" };
   sync.account = { configured: true, signedIn: true, liveSync: true };
   const access = { link: false, users: [], orgs: ["acme"], teams: [], repo: false };
-  sync.rules = [{ path: "/work/proj", sync: true, share: access, listed: true, since: "2026-01-01T00:00:00.000Z" }];
+  sync.rules = [{ instance: "x", path: "/work/proj", sync: true, share: access, listed: true, since: "2026-01-01T00:00:00.000Z" }];
 
   await internals.autosync("claude/auto");
   expect(calls.map((c) => c.kind)).toEqual(["create", "append"]);
@@ -101,7 +101,7 @@ test("autosync creates shares with the rule's access, refreshes existing ones, a
   internals.deleted.clear();
   sync.rules = [{ ...sync.rules[0]!, since: "2026-03-01T00:00:00.000Z" }];
   await internals.autosync("claude/auto");
-  sync.rules = [{ path: "/work/pro", sync: true, since: "2026-01-01T00:00:00.000Z" }];
+  sync.rules = [{ instance: "x", path: "/work/pro", sync: true, since: "2026-01-01T00:00:00.000Z" }];
   await internals.autosync("claude/auto");
   expect(calls).toHaveLength(before);
 });
@@ -112,9 +112,9 @@ test("rules match by normalized git remote, or by directory prefix", () => {
   expect(normalizeRemote("ssh://git@github.com/rt2zz/opticon.git")).toBe("github.com/rt2zz/opticon");
   expect(normalizeRemote("/local/bare/repo")).toBeUndefined();
   const since = "2026-01-01T00:00:00.000Z";
-  expect(matches({ repo: "github.com/a/b", sync: true, since }, "/anywhere", "github.com/a/b")).toBe(true);
-  expect(matches({ repo: "github.com/a/b", sync: true, since }, "/anywhere", undefined)).toBe(false);
-  expect(matches({ path: "/work/proj", sync: true, since }, "/work/proj", undefined)).toBe(true);
-  expect(matches({ path: "/work/proj", sync: true, since }, "/work/project", undefined)).toBe(false);
-  expect(matches({ path: "/work/proj", sync: false, since }, "/work/proj/x", undefined)).toBe(false);
+  expect(matches({ instance: "x", repo: "github.com/a/b", sync: true, since }, "/anywhere", "github.com/a/b")).toBe(true);
+  expect(matches({ instance: "x", repo: "github.com/a/b", sync: true, since }, "/anywhere", undefined)).toBe(false);
+  expect(matches({ instance: "x", path: "/work/proj", sync: true, since }, "/work/proj", undefined)).toBe(true);
+  expect(matches({ instance: "x", path: "/work/proj", sync: true, since }, "/work/project", undefined)).toBe(false);
+  expect(matches({ instance: "x", path: "/work/proj", sync: false, since }, "/work/proj/x", undefined)).toBe(false);
 });
