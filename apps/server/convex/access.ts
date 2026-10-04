@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, action, internalMutation } from "./_generated/server";
 import { MEMBERSHIP_TTL_MS } from "./lib";
 
@@ -15,14 +16,8 @@ export const refreshMemberships = action({
   args: { token: v.string(), force: v.optional(v.boolean()) },
   handler: async (ctx, { token, force }): Promise<{ orgs: string[]; teams: string[] } | null> => {
     const viewer = await ctx.runQuery(internal.auth.githubToken, { token });
-    if (!viewer?.githubToken) return null;
-    let githubToken = viewer.githubToken;
-    if (viewer.expiresAt !== undefined && viewer.expiresAt <= Date.now() + 60_000) {
-      const refreshed = await refreshGithubToken(ctx, viewer);
-      if (!refreshed) return null;
-      githubToken = refreshed;
-    }
-    const headers = { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" };
+    const headers = viewer && (await githubHeaders(ctx, viewer));
+    if (!viewer || !headers) return null;
     const orgs = (await paginate<{ login: string }>("https://api.github.com/user/orgs", headers)).map((o) => o.login.toLowerCase());
     const teams = (await paginate<{ slug: string; organization: { login: string } }>("https://api.github.com/user/teams", headers)).map(
       (t) => `${t.organization.login}/${t.slug}`.toLowerCase(),
@@ -32,10 +27,27 @@ export const refreshMemberships = action({
   },
 });
 
-async function refreshGithubToken(ctx: ActionCtx, viewer: {
-  userId: import("./_generated/dataModel").Id<"users">;
-  refreshToken?: string; refreshExpiresAt?: number;
-}): Promise<string | null> {
+export interface GithubCredentials {
+  userId: Id<"users">;
+  githubToken?: string;
+  expiresAt?: number;
+  refreshToken?: string;
+  refreshExpiresAt?: number;
+}
+
+/** API headers using the user's own GitHub token, refreshed if it's about to expire. Null without a usable token. */
+export async function githubHeaders(ctx: ActionCtx, credentials: GithubCredentials): Promise<Record<string, string> | null> {
+  let githubToken = credentials.githubToken;
+  if (!githubToken) return null;
+  if (credentials.expiresAt !== undefined && credentials.expiresAt <= Date.now() + 60_000) {
+    const refreshed = await refreshGithubToken(ctx, credentials);
+    if (!refreshed) return null;
+    githubToken = refreshed;
+  }
+  return { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" };
+}
+
+async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Promise<string | null> {
   const refreshToken = viewer.refreshToken;
   if (!refreshToken || (viewer.refreshExpiresAt !== undefined && viewer.refreshExpiresAt <= Date.now())) return null;
   if (!await ctx.runMutation(internal.auth.claimGithubRefresh, { userId: viewer.userId, refreshToken })) return null;

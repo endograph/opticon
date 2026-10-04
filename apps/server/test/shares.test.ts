@@ -13,6 +13,8 @@ const modules = {
   "../convex/presence.ts": () => import("../convex/presence"),
   "../convex/follows.ts": () => import("../convex/follows"),
   "../convex/access.ts": () => import("../convex/access"),
+  "../convex/repos.ts": () => import("../convex/repos"),
+  "../convex/crons.ts": () => import("../convex/crons"),
   "../convex/http.ts": () => import("../convex/http"),
 };
 
@@ -397,5 +399,111 @@ describe("GitHub token refresh", () => {
       await expect(t.action(api.access.refreshMemberships, { token })).rejects.toThrow(/503/);
       expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({ orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
     } finally { globalThis.fetch = original; }
+  });
+});
+
+describe("repo pages", () => {
+  /** Stubs GET /repos/:owner/:name; `repos` maps the requested path to GitHub's answer. */
+  async function withGithub<R>(repos: Record<string, { full_name: string; private?: boolean; push?: boolean } | number>, run: (calls: string[]) => Promise<R>) {
+    const calls: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const path = String(input).replace("https://api.github.com/repos/", "");
+      calls.push(path);
+      const repo = repos[path];
+      if (repo === undefined) return new Response("Not Found", { status: 404 });
+      if (typeof repo === "number") return new Response("", { status: repo });
+      return Response.json({ full_name: repo.full_name, private: repo.private ?? false, permissions: { push: repo.push ?? false } });
+    }) as unknown as typeof fetch;
+    try {
+      return await run(calls);
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  async function share(t: T, token: string, sessionId: string, repo?: string) {
+    return t.action(api.shares.create, {
+      token, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, title: sessionId, project: "opticon",
+      repo, access: LINK_ACCESS, discoverable: true,
+    });
+  }
+
+  test("lists shares only from users GitHub confirms can push to the public repo", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    const outsider = await signIn(t, "outsider", { githubToken: "gh-outsider" });
+    await withGithub({ "acme/app": { full_name: "Acme/App", push: true } }, async () => {
+      await share(t, owner, "s1", "github.com/Acme/App");
+    });
+    await withGithub({ "acme/app": { full_name: "Acme/App", push: false } }, async () => {
+      await share(t, outsider, "s2", "github.com/acme/app");
+    });
+    const listed = await t.query(api.shares.repoShares, { repo: "acme/app" });
+    expect(listed.map((s) => [s.title, s.repo, s.owner?.login])).toEqual([["s1", "acme/app", "owner"]]);
+  });
+
+  test("private repos, non-GitHub remotes, and users without a token are never linked", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    const tokenless = await signIn(t, "tokenless");
+    await withGithub({ "acme/secret": { full_name: "acme/secret", private: true, push: true }, "acme/app": { full_name: "acme/app", push: true } }, async (calls) => {
+      await share(t, owner, "s1", "github.com/acme/secret");
+      await share(t, owner, "s2", "gitlab.com/acme/app");
+      await share(t, tokenless, "s3", "github.com/acme/app");
+      expect(calls).toEqual(["acme/secret"]);
+    });
+    const repos = await t.run(async (ctx) => (await ctx.db.query("shares").collect()).map((s) => s.repo ?? null));
+    expect(repos).toEqual([null, null, null]);
+    expect(await t.run((ctx) => ctx.db.query("repoAccess").collect())).toEqual([]);
+  });
+
+  test("grants are cached, renames resolve to the canonical repo, and GitHub outages change nothing", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    await withGithub({ "old/name": { full_name: "new/name", push: true }, "new/name": { full_name: "new/name", push: true } }, async (calls) => {
+      const { shareId } = await share(t, owner, "s1", "github.com/old/name");
+      expect(await t.run(async (ctx) => (await ctx.db.get(shareId))?.repo)).toBe("new/name");
+      await share(t, owner, "s2", "github.com/new/name");
+      expect(calls).toEqual(["old/name"]);
+    });
+    await withGithub({ "other/repo": 502 }, async () => {
+      // Re-sharing during an outage keeps the existing link (and bumps the share to the top).
+      await share(t, owner, "s1", "github.com/other/repo");
+    });
+    expect((await t.query(api.shares.repoShares, { repo: "new/name" })).map((s) => s.title)).toEqual(["s1", "s2"]);
+  });
+
+  test("the recheck unlists shares when push access is lost and follows renames", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
+      await share(t, owner, "s1", "github.com/acme/app");
+      await share(t, owner, "s2", "github.com/acme/lib");
+    });
+    await t.run(async (ctx) => {
+      for (const g of await ctx.db.query("repoAccess").collect()) await ctx.db.patch(g._id, { checkedAt: 0 });
+    });
+    await withGithub({ "acme/app": { full_name: "acme/app", push: false }, "acme/lib": { full_name: "acme/library", push: true } }, async () => {
+      await t.action(internal.repos.recheck, {});
+    });
+    expect(await t.query(api.shares.repoShares, { repo: "acme/app" })).toEqual([]);
+    expect((await t.query(api.shares.repoShares, { repo: "acme/library" })).map((s) => s.title)).toEqual(["s2"]);
+    expect((await t.run((ctx) => ctx.db.query("repoAccess").collect())).map((g) => g.repo)).toEqual(["acme/library"]);
+  });
+
+  test("a user's project page lists their discoverable shares in that project", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner");
+    await share(t, owner, "s1");
+    await t.action(api.shares.create, {
+      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s2", project: "other", access: LINK_ACCESS, discoverable: true,
+    });
+    await t.action(api.shares.create, {
+      token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId: "s3", project: "opticon", access: LINK_ACCESS,
+    });
+    const page = await t.query(api.shares.userProject, { login: "Owner", project: "opticon" });
+    expect(page?.shares.map((s) => s.title)).toEqual(["s1"]);
+    expect(await t.query(api.shares.userProject, { login: "nobody", project: "opticon" })).toBeNull();
   });
 });

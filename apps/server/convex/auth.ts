@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 import { type ActionCtx, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { randomToken, requireUser, sha256, userForToken } from "./lib";
 
@@ -157,16 +158,22 @@ export const takeApprovedCliLogin = internalMutation({
 
 export const githubToken = internalQuery({
   args: { token: v.string() },
-  handler: async (ctx, { token }) => {
-    const user = await userForToken(ctx, token);
-    return user ? {
-      userId: user._id, githubToken: user.githubToken,
-      expiresAt: user.githubTokenExpiresAt,
-      refreshToken: user.githubRefreshToken,
-      refreshExpiresAt: user.githubRefreshTokenExpiresAt,
-    } : null;
-  },
+  handler: async (ctx, { token }) => githubCredentials(await userForToken(ctx, token)),
 });
+
+export const githubTokenForUser = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => githubCredentials(await ctx.db.get(userId)),
+});
+
+function githubCredentials(user: Doc<"users"> | null) {
+  return user ? {
+    userId: user._id, githubToken: user.githubToken,
+    expiresAt: user.githubTokenExpiresAt,
+    refreshToken: user.githubRefreshToken,
+    refreshExpiresAt: user.githubRefreshTokenExpiresAt,
+  } : null;
+}
 
 /** Serialize refreshes: GitHub invalidates the old refresh token after use. */
 export const claimGithubRefresh = internalMutation({

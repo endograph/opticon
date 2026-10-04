@@ -10,6 +10,7 @@ import { Link } from "../router";
 import { signOut } from "../session";
 import { recordLocalVisit, setLocalFollowing, useLocalHistory } from "./localHistory";
 import { ProviderIcon } from "../ProviderIcon";
+import { ProjectLink } from "./Discover";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -77,7 +78,7 @@ export function ShareView({ slug }: { slug: string }) {
                 {owner.login}
               </Link>
             )}
-            {share.project && <span>{share.project}</span>}
+            <ProjectLink project={share.project} repo={share.repo} login={owner?.login} />
             <span>Updated {formatTime(new Date(share.updatedAt).toISOString())}</span>
           </div>
         </div>

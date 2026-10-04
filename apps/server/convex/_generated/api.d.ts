@@ -10,10 +10,12 @@
 
 import type * as access from "../access.js";
 import type * as auth from "../auth.js";
+import type * as crons from "../crons.js";
 import type * as follows from "../follows.js";
 import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 import type * as presence from "../presence.js";
+import type * as repos from "../repos.js";
 import type * as shares from "../shares.js";
 
 import type {
@@ -25,10 +27,12 @@ import type {
 declare const fullApi: ApiFromModules<{
   access: typeof access;
   auth: typeof auth;
+  crons: typeof crons;
   follows: typeof follows;
   http: typeof http;
   lib: typeof lib;
   presence: typeof presence;
+  repos: typeof repos;
   shares: typeof shares;
 }>;
 

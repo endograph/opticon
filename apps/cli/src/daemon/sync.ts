@@ -111,13 +111,19 @@ export class ShareSync {
     if (!session) throw new Error("Session not found");
     const { meta } = session;
     const projection = projectSessionForShare(session);
+    // The server links the share to a public GitHub repo once it confirms we can push to it.
+    // Other remotes stay on this machine.
+    const remote = meta.cwd ? await this.repoFor(meta.cwd) : undefined;
+    const repo = remote?.startsWith("github.com/") ? remote : undefined;
     const { shareId, slug } = await client.action(api.shares.create, {
       token: auth.token,
       protocol: PROTOCOL_VERSION,
       provider: meta.provider,
       sessionId: meta.id,
       title: projection.meta.title,
-      project: projection.meta.project,
+      // Clones and worktrees of a repo are one project.
+      project: repo ? repo.split("/").at(-1) : projection.meta.project,
+      repo,
       access,
       auto,
       discoverable,
@@ -217,16 +223,18 @@ export class ShareSync {
     this.emit();
   }
 
-  /** The rule covering `cwd`, if any. Remotes are looked up once per directory. */
+  /** The rule covering `cwd`, if any. */
   async ruleFor(cwd: string): Promise<AutosyncRule | undefined> {
     if (!this.rules.length) return undefined;
-    let repo: Promise<string | undefined> | undefined;
-    if (this.rules.some((r) => r.repo)) {
-      repo = this.repos.get(cwd) ?? repoOf(cwd);
-      this.repos.set(cwd, repo);
-    }
-    const remote = await repo;
+    const remote = this.rules.some((r) => r.repo) ? await this.repoFor(cwd) : undefined;
     return this.rules.find((r) => matches(r, cwd, remote));
+  }
+
+  /** The normalized origin remote of `cwd`, looked up once per directory. */
+  private repoFor(cwd: string): Promise<string | undefined> {
+    const repo = this.repos.get(cwd) ?? repoOf(cwd);
+    this.repos.set(cwd, repo);
+    return repo;
   }
 
   /**

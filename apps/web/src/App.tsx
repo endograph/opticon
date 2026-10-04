@@ -6,7 +6,7 @@ import { isLocal, setPageTitle } from "./config";
 import { useIdentity } from "./identity";
 import { LocalSessions } from "./local/LocalSessions";
 import { type Route, useRoute } from "./router";
-import { Profile } from "./shares/Discover";
+import { Profile, RepoPage, UserProject } from "./shares/Discover";
 import { Following, useImportLocalHistory } from "./shares/Following";
 import { MyShares } from "./shares/MyShares";
 import { ShareView } from "./shares/ShareView";
@@ -43,6 +43,10 @@ function page(route: Route) {
       return <Following />;
     case "user":
       return <Profile key={route.login} login={route.login} />;
+    case "userProject":
+      return <UserProject key={`${route.login}/${route.project}`} login={route.login} project={route.project} />;
+    case "repo":
+      return <RepoPage key={route.repo} repo={route.repo} />;
     case "cli":
       return <CliApprove code={route.code} />;
     case "not_found":

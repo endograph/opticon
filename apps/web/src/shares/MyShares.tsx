@@ -6,9 +6,10 @@ import { useState } from "react";
 import { describeAccess, isPrivate, useAccessEditor } from "../AccessEditor";
 import { config, isLocal } from "../config";
 import { relativeTime } from "../format";
-import { SignInButton, useToken } from "../identity";
+import { SignInButton, useIdentity, useToken } from "../identity";
 import { Link } from "../router";
 import { ProviderIcon } from "../ProviderIcon";
+import { ProjectLink } from "./Discover";
 
 type Share = FunctionReturnType<typeof api.shares.mine>[number];
 
@@ -65,6 +66,7 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
   const remove = useMutation(api.shares.remove);
   const setAccess = useMutation(api.shares.setAccess);
   const setDiscoverable = useMutation(api.shares.setDiscoverable);
+  const { me } = useIdentity();
   const privateShare = isPrivate(share.access);
   const url = `${config.webUrl}/s/${share.slug}`;
 
@@ -76,6 +78,7 @@ function ShareRow({ share, token }: { share: Share; token: string }) {
         </Link>
         <div className="session-meta">
           <ProviderIcon provider={share.provider} />
+          <ProjectLink project={share.project} repo={share.repo} login={me?.login} />
           <span>{describeAccess(share.access)}</span>
           {share.discoverable && <span title="On your profile and the public feed">listed</span>}
           {share.auto && <span title="Created by autosync">auto</span>}

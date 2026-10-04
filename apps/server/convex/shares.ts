@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
 import { followRow } from "./follows";
 import { decideAccess, randomToken, requireProtocol, requireUser, userForToken } from "./lib";
+import { verifyRepoClaim } from "./repos";
 import { accessValidator, sharedEventValidator } from "./schema";
 
 const MAX_BATCH = 500;
@@ -22,6 +23,9 @@ const provider = v.union(v.literal("claude"), v.literal("codex"));
  * only ever creates: it leaves an existing share alone and is rejected for deleted ones. An
  * explicit share of a deleted session replaces the tombstone with a fresh share and link.
  * `discoverable` lists the share publicly; it only takes effect with link access.
+ *
+ * `repo` is the session's GitHub remote as the daemon sees it (`github.com/owner/name`). It's
+ * only a claim: the share is linked to the repo once GitHub confirms the owner can push to it.
  */
 export const create = action({
   args: {
@@ -31,14 +35,26 @@ export const create = action({
     sessionId: v.string(),
     title: v.optional(v.string()),
     project: v.optional(v.string()),
+    repo: v.optional(v.string()),
     access: accessValidator,
     auto: v.optional(v.boolean()),
     discoverable: v.optional(v.boolean()),
   },
-  handler: async (ctx, { protocol, ...args }): Promise<{ shareId: Id<"shares">; slug: string }> => {
+  handler: async (ctx, { protocol, repo: claim, ...args }): Promise<{ shareId: Id<"shares">; slug: string }> => {
     requireProtocol(protocol);
     // Slugs are generated here because only actions get unpredictable randomness.
-    return ctx.runMutation(internal.shares.upsert, { ...args, slug: randomToken(16) });
+    const result = await ctx.runMutation(internal.shares.upsert, { ...args, slug: randomToken(16) });
+    const repo = await verifyRepoClaim(ctx, args.token, claim);
+    if (repo !== undefined) await ctx.runMutation(internal.shares.setRepo, { shareId: result.shareId, ...(repo ? { repo } : {}) });
+    return result;
+  },
+});
+
+export const setRepo = internalMutation({
+  args: { shareId: v.id("shares"), repo: v.optional(v.string()) },
+  handler: async (ctx, { shareId, repo }) => {
+    const share = await ctx.db.get(shareId);
+    if (share && share.repo !== repo) await ctx.db.patch(shareId, { repo });
   },
 });
 
@@ -199,6 +215,8 @@ export const mine = query({
         provider: s.provider,
         sessionId: s.sessionId,
         title: s.title,
+        project: s.project,
+        repo: s.repo,
         access: s.access,
         auto: s.auto ?? false,
         discoverable: s.discoverable ?? false,
@@ -281,12 +299,47 @@ export const profile = query({
   },
 });
 
+/** One user's discoverable shares in one project. */
+export const userProject = query({
+  args: { login: v.string(), project: v.string() },
+  handler: async (ctx, { login, project }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_login", (q) => q.eq("login", login.toLowerCase()))
+      .unique();
+    if (!user) return null;
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_owner_project_discoverable", (q) => q.eq("ownerId", user._id).eq("project", project).eq("discoverable", true))
+      .order("desc")
+      .take(PROFILE_LIMIT);
+    return {
+      user: { login: user.login, name: user.name, avatarUrl: user.avatarUrl },
+      shares: await Promise.all(shares.map((s) => publicSummary(ctx, s))),
+    };
+  },
+});
+
+/** Discoverable shares in a public GitHub repo, from everyone verified to push to it. */
+export const repoShares = query({
+  args: { repo: v.string() },
+  handler: async (ctx, { repo }) => {
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_repo_discoverable", (q) => q.eq("repo", repo.toLowerCase()).eq("discoverable", true))
+      .order("desc")
+      .take(PROFILE_LIMIT);
+    return Promise.all(shares.map((s) => publicSummary(ctx, s)));
+  },
+});
+
 async function publicSummary(ctx: QueryCtx, share: Doc<"shares">) {
   const owner = await ctx.db.get(share.ownerId);
   return {
     slug: share.slug,
     title: share.title,
     project: share.project,
+    repo: share.repo,
     provider: share.provider,
     updatedAt: share.updatedAt,
     eventCount: share.eventCount,
@@ -316,6 +369,7 @@ export const view = query({
       share: {
         title: share.title,
         project: share.project,
+        repo: share.repo,
         provider: share.provider,
         eventCount: share.eventCount,
         rev: share.rev,

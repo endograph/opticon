@@ -91,8 +91,13 @@ export default defineSchema({
     provider: v.union(v.literal("claude"), v.literal("codex")),
     sessionId: v.string(),
     title: v.optional(v.string()),
-    /** Project directory name only, never the full path. */
+    /** Display name: the repo name, or the directory name outside a repo. Never a full path. */
     project: v.optional(v.string()),
+    /**
+     * Public GitHub repo as lowercase `owner/name`. Only set once the server has confirmed, with
+     * the owner's own GitHub token, that the owner can push to it; lists the share on its repo page.
+     */
+    repo: v.optional(v.string()),
     access: accessValidator,
     eventCount: v.number(),
     /** Position counter: an event's seq is fixed when it first appears. */
@@ -114,7 +119,19 @@ export default defineSchema({
     .index("by_owner", ["ownerId"])
     .index("by_owner_session", ["ownerId", "provider", "sessionId"])
     .index("by_discoverable", ["discoverable", "updatedAt"])
-    .index("by_owner_discoverable", ["ownerId", "discoverable", "updatedAt"]),
+    .index("by_owner_discoverable", ["ownerId", "discoverable", "updatedAt"])
+    .index("by_owner_project_discoverable", ["ownerId", "project", "discoverable", "updatedAt"])
+    .index("by_repo_discoverable", ["repo", "discoverable", "updatedAt"]),
+
+  /** Verified push access to a public GitHub repo, re-checked by a daily cron. Only grants are stored. */
+  repoAccess: defineTable({
+    userId: v.id("users"),
+    /** Lowercase `owner/name`, canonical after renames. */
+    repo: v.string(),
+    checkedAt: v.number(),
+  })
+    .index("by_user_repo", ["userId", "repo"])
+    .index("by_checked", ["checkedAt"]),
 
   shareEvents: defineTable({
     shareId: v.id("shares"),

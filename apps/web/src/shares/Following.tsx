@@ -7,6 +7,7 @@ import { SignInButton, useToken } from "../identity";
 import { Link } from "../router";
 import { clearLocalHistory, readLocalHistory, setLocalFollowing, useLocalHistory } from "./localHistory";
 import { ProviderIcon } from "../ProviderIcon";
+import { ProjectLink } from "./Discover";
 
 type Followed = FunctionReturnType<typeof api.follows.list>[number];
 type Available = Extract<Followed, { available: true }>;
@@ -93,7 +94,7 @@ function FollowedMeta({ share, now }: { share: Available; now: number }) {
           {share.owner.login}
         </Link>
       )}
-      {share.project && <span>{share.project}</span>}
+      <ProjectLink project={share.project} repo={share.repo} login={share.owner?.login} />
       {share.unread > 0 && <span className="unread-mark">{share.unread} new</span>}
       {(isLive(updated, now) || share.viewers > 0) && (
         <span className="presence">

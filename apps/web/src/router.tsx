@@ -9,6 +9,10 @@ export type Route =
   | { name: "following" }
   /** A user's public profile. */
   | { name: "user"; login: string }
+  /** One user's public sessions in one project. */
+  | { name: "userProject"; login: string; project: string }
+  /** Public sessions in a GitHub repo from everyone who can push to it; `repo` is `owner/name`. */
+  | { name: "repo"; repo: string }
   | { name: "cli"; code: string }
   | { name: "not_found" };
 
@@ -23,6 +27,10 @@ export function parseRoute(path: string, search: string): Route {
   if (path === "/following") return { name: "following" };
   const user = path.match(/^\/u\/([\w-]+)$/);
   if (user?.[1]) return { name: "user", login: user[1] };
+  const userProject = path.match(/^\/u\/([\w-]+)\/p\/([^/]+)$/);
+  if (userProject?.[1] && userProject[2]) return { name: "userProject", login: userProject[1], project: decodeURIComponent(userProject[2]) };
+  const repo = path.match(/^\/gh\/([\w.-]+\/[\w.-]+)$/);
+  if (repo?.[1]) return { name: "repo", repo: repo[1].toLowerCase() };
   if (path === "/cli") return { name: "cli", code: new URLSearchParams(search).get("code") ?? "" };
   return { name: "not_found" };
 }

@@ -109,6 +109,7 @@ async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, viewer: 
     available: true as const,
     title: share.title,
     project: share.project,
+    repo: share.repo,
     provider: share.provider,
     updatedAt: share.updatedAt,
     eventCount: share.eventCount,
