@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, open, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@opticon/core";
 import { DAEMON_FILE, DEFAULT_PORT, LOG_FILE, OPTICON_HOME, TOKEN_FILE, selfCommand } from "../paths";
 import { startServer } from "./server";
@@ -9,6 +10,22 @@ declare const OPTICON_VERSION: string | undefined;
 
 /** Set by `--define` in release builds; "dev" when running from source. */
 export const VERSION = typeof OPTICON_VERSION === "string" ? OPTICON_VERSION : "dev";
+
+/**
+ * Identifies the exact code a daemon runs, so a stale one gets replaced. Releases use the version;
+ * source checkouts fingerprint the sources, since every one of them is "dev".
+ */
+export const BUILD = VERSION === "dev" ? `dev-${await sourceFingerprint()}` : VERSION;
+
+async function sourceFingerprint(): Promise<string> {
+  const root = join(import.meta.dir, "../../../..");
+  const files = ["apps/*/src/**", "packages/*/src/**", "apps/web/index.html"]
+    .flatMap((pattern) => [...new Bun.Glob(pattern).scanSync({ cwd: root })])
+    .sort();
+  const hasher = new Bun.CryptoHasher("sha1");
+  for (const file of files) hasher.update(file).update(await Bun.file(join(root, file)).bytes());
+  return hasher.digest("hex").slice(0, 10);
+}
 
 interface DaemonInfo {
   pid: number;
@@ -24,14 +41,14 @@ export async function runDaemon(port = DEFAULT_PORT): Promise<void> {
     process.exit(1);
   }
   const token = await localToken();
-  const started = await startServer({ port, token, version: VERSION }).catch((error: { code?: string }) => {
+  const started = await startServer({ port, token, version: BUILD }).catch((error: { code?: string }) => {
     if (error.code !== "EADDRINUSE") throw error;
     console.error(`Port ${port} is in use by another program. Set OPTICON_PORT to use a different port.`);
     process.exit(1);
   });
   const { server, store, sync } = started;
   await Bun.write(DAEMON_FILE, JSON.stringify({ pid: process.pid, port, protocol: PROTOCOL_VERSION } satisfies DaemonInfo));
-  console.log(`opticon daemon ${VERSION} listening on ${server.url}`);
+  console.log(`opticon daemon ${BUILD} listening on ${server.url}`);
   const shutdown = async () => {
     store.stop();
     sync.stop();
@@ -52,9 +69,9 @@ export async function ensureDaemon(): Promise<DaemonInfo> {
   const info = await readInfo();
   if (info) {
     const health = await fetchHealth(info.port);
-    if (health?.protocol === PROTOCOL_VERSION && health.version === VERSION) return info;
+    if (health?.protocol === PROTOCOL_VERSION && health.version === BUILD) return info;
     if (health) {
-      console.log(`Restarting daemon (running ${health.version}, this CLI is ${VERSION}).`);
+      console.log(`Restarting daemon (running ${health.version}, this CLI is ${BUILD}).`);
       await stopDaemon();
     }
   }
