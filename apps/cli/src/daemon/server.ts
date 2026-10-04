@@ -192,11 +192,11 @@ export async function startServer(options: DaemonOptions) {
         return Response.json({ rule: rule ?? null, target: describeRule(target) });
       }),
 
-      /** The session's GitHub repo as `owner/name`, from its origin remote, or null. */
+      /** The session's GitHub repo as `owner/name`, from its origin remote, or null. Uses the server's GitHub host. */
       "/api/sessions/:provider/:id/repo": guard(async (req) => {
         const cwd = store.get(sessionKey(req))?.cwd;
         const remote = cwd ? await syncFor(req).repoFor(cwd) : undefined;
-        return Response.json({ repo: remote?.startsWith("github.com/") ? remote.slice("github.com/".length) : null });
+        return Response.json({ repo: (remote && syncFor(req).githubRepo(remote)) ?? null });
       }),
 
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {

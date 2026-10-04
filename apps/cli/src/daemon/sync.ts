@@ -63,6 +63,8 @@ export class ShareSync {
   /** Shares this run already tried to link to their repo; see claimRepos. */
   private repoClaims = new Set<string>();
   private claimQueue: Promise<void> = Promise.resolve();
+  /** The host of this server's GitHub, as it appears in remotes. */
+  private githubHost = "github.com";
   rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
   account: AccountState;
@@ -113,9 +115,9 @@ export class ShareSync {
     const { meta } = session;
     const projection = projectSessionForShare(session);
     // The server links the share to its GitHub repo once it confirms we can push to it.
-    // Other remotes stay on this machine.
+    // Remotes on other hosts stay on this machine.
     const remote = meta.cwd ? await this.repoFor(meta.cwd) : undefined;
-    const repo = remote?.startsWith("github.com/") ? remote : undefined;
+    const repo = remote && this.githubRepo(remote) ? remote : undefined;
     const { shareId, slug } = await client.action(api.shares.create, {
       token: auth.token,
       protocol: PROTOCOL_VERSION,
@@ -146,7 +148,7 @@ export class ShareSync {
         .then(async () => {
           const cwd = this.store.get(keyOf({ provider: share.provider, id: share.sessionId }))?.cwd;
           const remote = cwd ? await this.repoFor(cwd) : undefined;
-          if (!remote?.startsWith("github.com/")) return;
+          if (!remote || !this.githubRepo(remote)) return;
           const { client, auth } = this.requireClient();
           await client.action(api.shares.claimRepo, {
             token: auth.token,
@@ -184,6 +186,12 @@ export class ShareSync {
     return { configured: true, instance: name, convexUrl, signedIn: false, liveSync: true, webUrl };
   }
 
+  /** `owner/name` when `remote` (e.g. `github.com/owner/name`) is on this server's GitHub. */
+  githubRepo(remote: string): string | undefined {
+    const prefix = `${this.githubHost}/`;
+    return remote.startsWith(prefix) ? remote.slice(prefix.length) : undefined;
+  }
+
   /** This server's CLI token, for the local app to talk to its backend directly. */
   token(): string | undefined {
     return this.auth?.token;
@@ -203,6 +211,10 @@ export class ShareSync {
     const { token } = this.auth;
     const client = new ConvexClient(this.instance.convexUrl);
     this.client = client;
+    // Its GitHub may be GitHub Enterprise Server; only remotes there are ever sent.
+    const policy = await client.query(api.instance.policy, {}).catch(() => undefined);
+    this.githubHost = policy?.githubUrl ? new URL(policy.githubUrl).host.toLowerCase() : "github.com";
+    if (this.client !== client) return;
     const onError = (error: Error) => {
       this.account = { ...this.account, signedIn: false, error: error.message };
       this.emit();

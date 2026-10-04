@@ -3,15 +3,20 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, type MutationCtx, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { type GithubCredentials, githubHeaders, saveVisibility } from "./access";
+import { githubApi, githubHost } from "./github";
 
 /** How long a verified grant is trusted before the cron checks it again. */
 export const REPO_TTL_MS = 24 * 60 * 60_000;
 const RECHECK_BATCH = 100;
 
-/** `github.com/Owner/Name`, as the daemon normalizes remotes, to `owner/name`. Null for anything else. */
+/**
+ * `github.com/Owner/Name`, as the daemon normalizes remotes, to `owner/name`. Null for anything
+ * else, including other hosts than this instance's GitHub.
+ */
 export function parseRepoClaim(claim: string): string | null {
-  const match = /^github\.com\/([\w.-]+)\/([\w.-]+)$/i.exec(claim);
-  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+  const [host, ...rest] = claim.toLowerCase().split("/");
+  const match = host === githubHost() ? /^([\w.-]+)\/([\w.-]+)$/.exec(rest.join("/")) : null;
+  return match ? `${match[1]}/${match[2]}` : null;
 }
 
 /**
@@ -67,7 +72,7 @@ async function pushableRepo(
 ): Promise<{ canonical: string | null; private?: boolean }> {
   const headers = await githubHeaders(ctx, credentials);
   if (!headers) return { canonical: null };
-  const res = await fetch(`https://api.github.com/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) });
+  const res = await fetch(`${githubApi()}/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) });
   if (res.status === 401 || res.status === 404) return { canonical: null };
   if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
   const body = (await res.json()) as { full_name: string; private: boolean; permissions?: { push?: boolean } };

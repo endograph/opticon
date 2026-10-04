@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Mark } from "./Mark";
-import { GITHUB_URL, INSTALL_COMMAND, LOCAL_APP_URL, isLocal } from "./config";
+import { GITHUB_URL, LOCAL_APP_URL, config, installCommand, isDefaultInstance, isLocal, loginCommand } from "./config";
 import { SignInButton, useIdentity } from "./identity";
 import { Link } from "./router";
 import { CopyCommand } from "./CopyCommand";
@@ -48,7 +48,8 @@ export function Home() {
       {!isLocal() && (
         <section className="install">
           <h2>Get started</h2>
-          <CopyCommand command={INSTALL_COMMAND} />
+          <CopyCommand command={installCommand()} />
+          {!isDefaultInstance() && <CopyCommand command={`opticon instance ${config.webUrl}`} />}
           <CopyCommand command="opticon web" />
           <p className="dim">
             macOS and Linux. <code>opticon web</code> runs in the background and opens your sessions in the browser.
@@ -90,7 +91,7 @@ function InstallDialog({ onClose }: { onClose: () => void }) {
         <ol className="install-steps">
           <li>
             <strong>Install</strong> on the computer where you run Claude Code or Codex:
-            <CopyCommand command={INSTALL_COMMAND} />
+            <CopyCommand command={installCommand()} />
             <span className="dim">macOS and Linux. Installs to ~/.opticon/bin.</span>
           </li>
           <li>
@@ -99,7 +100,7 @@ function InstallDialog({ onClose }: { onClose: () => void }) {
           </li>
           <li>
             <strong>To share,</strong> sign in with GitHub, then use Share… on any session:
-            <CopyCommand command="opticon login" />
+            <CopyCommand command={loginCommand()} />
           </li>
         </ol>
         <h3>How it works</h3>
@@ -154,7 +155,7 @@ export function LocalExplainer() {
       <ol className="steps">
         <li>
           On the computer where you run Claude Code or Codex, install the CLI:
-          <CopyCommand command={INSTALL_COMMAND} />
+          <CopyCommand command={installCommand()} />
         </li>
         <li>
           Run <code>opticon web</code>. It starts Opticon in the background and opens your sessions in the browser.

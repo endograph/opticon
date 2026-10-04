@@ -54,4 +54,11 @@ export const LOCAL_GREEN = { light: "#4f7a5c", dark: "#8fb39a" };
 export const LOCAL_APP_URL = "http://127.0.0.1:4317";
 
 export const GITHUB_URL = "https://github.com/endograph/opticon";
-export const INSTALL_COMMAND = "curl -fsSL https://opticon.tv/install.sh | sh";
+/** Every hosted instance serves the installer; it downloads the same release from GitHub. */
+export const installCommand = () => `curl -fsSL ${config.webUrl}/install.sh | sh`;
+
+/** True on opticon.tv (or its local app), which the CLI uses unless told otherwise. */
+export const isDefaultInstance = () => new URL(config.webUrl).host === "opticon.tv";
+
+/** Signs the CLI in to this instance, selecting it first unless it's opticon.tv. */
+export const loginCommand = () => (isDefaultInstance() ? "opticon login" : `opticon instance ${config.webUrl} && opticon login`);

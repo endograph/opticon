@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, type MutationCtx, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { githubApi, githubApiHeaders, githubUrl } from "./github";
 import { instancePolicy } from "./instance";
 import { ACCESS_REFRESH_MS } from "./lib";
 
@@ -26,8 +27,8 @@ export const refresh = action({
     if (!viewer || !headers) return null;
     await Promise.all(repos.slice(0, MAX_REPO_REFRESH).map((repo) => refreshRepoRead(ctx, viewer.userId, headers, repo.toLowerCase())));
     if (!memberships) return null;
-    const orgs = (await paginate<{ login: string }>("https://api.github.com/user/orgs", headers)).map((o) => o.login.toLowerCase());
-    const teams = (await paginate<{ slug: string; organization: { login: string } }>("https://api.github.com/user/teams", headers)).map(
+    const orgs = (await paginate<{ login: string }>(`${githubApi()}/user/orgs`, headers)).map((o) => o.login.toLowerCase());
+    const teams = (await paginate<{ slug: string; organization: { login: string } }>(`${githubApi()}/user/teams`, headers)).map(
       (t) => `${t.organization.login}/${t.slug}`.toLowerCase(),
     );
     await ctx.runMutation(internal.access.saveMemberships, { userId: viewer.userId, orgs, teams, force: force ?? false });
@@ -36,7 +37,7 @@ export const refresh = action({
 });
 
 async function refreshRepoRead(ctx: ActionCtx, userId: Id<"users">, headers: Record<string, string>, repo: string): Promise<void> {
-  const res = await fetch(`https://api.github.com/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) }).catch(() => null);
+  const res = await fetch(`${githubApi()}/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) }).catch(() => null);
   if (!res || rateLimited(res)) return;
   // GitHub answers 404 for private repos the user can't see; 403 when an org blocks Opticon.
   if (res.status === 403 || res.status === 404) {
@@ -81,7 +82,7 @@ export async function saveVisibility(ctx: MutationCtx, repo: string, isPrivate: 
  */
 export async function allowedOrgMembership(headers: Record<string, string>, orgs: string[]): Promise<string | null> {
   for (const org of orgs) {
-    const res = await fetch(`https://api.github.com/user/memberships/orgs/${org}`, { headers, signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`${githubApi()}/user/memberships/orgs/${org}`, { headers, signal: AbortSignal.timeout(10_000) });
     if (rateLimited(res)) throw new Error("GitHub rate limit");
     // 403: the org restricts Opticon's GitHub app; membership can't be seen, so it doesn't count.
     if (res.status === 401 || res.status === 403 || res.status === 404) continue;
@@ -162,7 +163,7 @@ export async function githubHeaders(ctx: ActionCtx, credentials: GithubCredentia
     if (!refreshed) return null;
     githubToken = refreshed;
   }
-  return { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" };
+  return githubApiHeaders(githubToken);
 }
 
 async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Promise<string | null> {
@@ -170,7 +171,7 @@ async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Pr
   if (!refreshToken || (viewer.refreshExpiresAt !== undefined && viewer.refreshExpiresAt <= Date.now())) return null;
   if (!await ctx.runMutation(internal.auth.claimGithubRefresh, { userId: viewer.userId, refreshToken })) return null;
   try {
-    const response = await fetch("https://github.com/login/oauth/access_token", {
+    const response = await fetch(`${githubUrl()}/login/oauth/access_token`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({

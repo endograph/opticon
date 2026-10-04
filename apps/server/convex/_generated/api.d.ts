@@ -13,6 +13,7 @@ import type * as auth from "../auth.js";
 import type * as badge from "../badge.js";
 import type * as crons from "../crons.js";
 import type * as follows from "../follows.js";
+import type * as github from "../github.js";
 import type * as http from "../http.js";
 import type * as instance from "../instance.js";
 import type * as lib from "../lib.js";
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   badge: typeof badge;
   crons: typeof crons;
   follows: typeof follows;
+  github: typeof github;
   http: typeof http;
   instance: typeof instance;
   lib: typeof lib;

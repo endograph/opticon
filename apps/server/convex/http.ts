@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { api, internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { allowedOrgMembership } from "./access";
+import { githubApi, githubApiHeaders, githubUrl } from "./github";
 import { issueToken } from "./auth";
 import { instancePolicy } from "./instance";
 import { sessionsBadge } from "./badge";
@@ -10,7 +11,8 @@ import { randomToken, sha256 } from "./lib";
 /**
  * Environment:
  *   OPTICON_WEB_URL        hosted web origin, e.g. https://opticon.tv. Login redirects must stay on it.
- *   GITHUB_CLIENT_ID       GitHub OAuth app
+ *   GITHUB_CLIENT_ID       GitHub App (or OAuth app); see docs/self-hosting.md
+ *   OPTICON_GITHUB_URL     GitHub Enterprise Server, e.g. https://github.acme.com (default github.com)
  *   GITHUB_CLIENT_SECRET
  *   OPTICON_DEV_AUTH=1     enables /auth/dev, which signs in as any login without GitHub. Never set in production.
  *
@@ -47,10 +49,11 @@ http.route({
     if (!clientId) return new Response("GitHub OAuth is not configured", { status: 503 });
     const state = randomToken(16);
     await ctx.runMutation(internal.auth.saveOauthState, { state, redirect: safeRedirect(new URL(req.url).searchParams.get("redirect")) });
-    const authorize = new URL("https://github.com/login/oauth/authorize");
+    const authorize = new URL(`${githubUrl()}/login/oauth/authorize`);
     authorize.searchParams.set("client_id", clientId);
     authorize.searchParams.set("redirect_uri", `${process.env.CONVEX_SITE_URL}/auth/github/callback`);
-    // read:org lets us check the viewer's own org and team membership for org/team shares.
+    // read:org lets an OAuth app check the viewer's org and team membership. GitHub Apps ignore
+    // scopes and use the app's permissions instead.
     authorize.searchParams.set("scope", "read:org");
     authorize.searchParams.set("state", state);
     return Response.redirect(authorize.toString(), 302);
@@ -66,7 +69,7 @@ http.route({
     const code = params.get("code");
     if (!redirect || !code) return new Response("Login expired, please try again.", { status: 400 });
 
-    const exchange = await fetch("https://github.com/login/oauth/access_token", {
+    const exchange = await fetch(`${githubUrl()}/login/oauth/access_token`, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({
@@ -84,16 +87,13 @@ http.route({
     };
     if (!githubToken) return new Response("GitHub login failed.", { status: 400 });
 
-    const profile = await fetch("https://api.github.com/user", {
-      headers: { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" },
-    });
+    const profile = await fetch(`${githubApi()}/user`, { headers: githubApiHeaders(githubToken) });
     if (!profile.ok) return new Response("Could not read GitHub profile.", { status: 502 });
     const gh = (await profile.json()) as { id: number; login: string; name?: string; avatar_url?: string };
     const { allowedOrgs } = instancePolicy();
     let memberOf: string | undefined;
     if (allowedOrgs.length) {
-      const headers = { authorization: `Bearer ${githubToken}`, accept: "application/vnd.github+json", "user-agent": "opticon" };
-      const org = await allowedOrgMembership(headers, allowedOrgs).catch(() => undefined);
+      const org = await allowedOrgMembership(githubApiHeaders(githubToken), allowedOrgs).catch(() => undefined);
       if (org === undefined) return new Response("Could not check your GitHub org membership. Try again shortly.", { status: 502 });
       if (!org) return new Response(`This Opticon is limited to members of ${allowedOrgs.join(", ")}.`, { status: 403 });
       memberOf = org;
@@ -164,7 +164,7 @@ http.route({
   }),
 });
 
-/** README badge for a repo page: `/badge/gh/<owner>/<name>.svg`. opticon.tv proxies /badge/* here. */
+/** README badge for a repo page: `/badge/gh/<owner>/<name>.svg`. The hosted web app proxies /badge/* here. */
 http.route({
   pathPrefix: "/badge/gh/",
   method: "GET",

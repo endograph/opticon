@@ -11,6 +11,7 @@ import { sessionKey, useSession, useSessionRepo } from "./api";
 import { projectHref } from "../shares/Discover";
 import { ProviderIcon } from "../ProviderIcon";
 import { setPageTitle } from "../config";
+import { useGithubUrl } from "../policy";
 
 /** This machine's sessions. Only rendered in the local app, which is served by the daemon. */
 export function LocalSessions({ route, selected }: { route: Route; selected?: string }) {
@@ -19,6 +20,7 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   const { sessions, status, account, shares } = daemon;
   const session = useSession(selected);
   const [sharing, setSharing] = useState(false);
+  const githubUrl = useGithubUrl();
 
   const meta = session.meta ?? sessions.find((s) => sessionKey(s) === selected);
   // Private copies (unshared, or auto synced without sharing) aren't marked as shared.
@@ -71,7 +73,7 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
                   (repo ? (
                     <a
                       className="mono project-link"
-                      href={`https://github.com/${repo}/tree/${encodeURI(meta.gitBranch)}`}
+                      href={`${githubUrl}/${repo}/tree/${encodeURI(meta.gitBranch)}`}
                       target="_blank"
                       rel="noreferrer"
                       title="Branch on GitHub"

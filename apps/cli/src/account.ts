@@ -132,9 +132,14 @@ async function discoverInstance(target: string): Promise<Instance> {
   return { name: new URL(webUrl).host, convexUrl: config.convexUrl, siteUrl: config.siteUrl, webUrl };
 }
 
+/** A server's limits and where its GitHub is, by default the selected server's. */
+export async function instancePolicy(convexUrl = endpoints().convexUrl) {
+  return new ConvexHttpClient(convexUrl).query(api.instance.policy, {});
+}
+
 /** The access new shares and autosync rules start with on a server, by default the selected one. */
 export async function defaultAccess(convexUrl = endpoints().convexUrl): Promise<ShareAccess> {
-  return (await new ConvexHttpClient(convexUrl).query(api.instance.policy, {})).defaultAccess;
+  return (await instancePolicy(convexUrl)).defaultAccess;
 }
 
 /** The servers the daemon syncs with: every known instance, or only the one env vars point at. */

@@ -5,10 +5,11 @@ import { useEffect } from "react";
 import { isLive, relativeTime, useNow } from "../format";
 import { Link } from "../router";
 import { ProviderIcon } from "../ProviderIcon";
-import { config, INSTALL_COMMAND, setPageTitle } from "../config";
+import { config, installCommand, loginCommand, setPageTitle } from "../config";
 import { CopyCommand } from "../CopyCommand";
 import { useToken } from "../identity";
 import { useAccessRefresh } from "./refresh";
+import { usePolicy } from "../policy";
 
 type PublicShare = FunctionReturnType<typeof api.shares.feed>["shares"][number];
 type ActiveRepo = FunctionReturnType<typeof api.shares.activeRepos>["repos"][number];
@@ -203,7 +204,7 @@ export function RepoPage({ repo }: { repo: string }) {
   const page = useQuery(api.shares.repoShares, { repo, token });
   useAccessRefresh(token, page?.stale);
   const shares = page?.shares;
-  const policy = useQuery(api.instance.policy, {});
+  const policy = usePolicy();
   useEffect(() => {
     setPageTitle(repo);
   }, [repo]);
@@ -214,7 +215,7 @@ export function RepoPage({ repo }: { repo: string }) {
     <div className="page">
       <header className="page-header">
         <h1>
-          <a href={`https://github.com/${repo}`} className="repo-title" target="_blank" rel="noreferrer">
+          <a href={`${policy?.githubUrl ?? "https://github.com"}/${repo}`} className="repo-title" target="_blank" rel="noreferrer">
             {repo}
           </a>
         </h1>
@@ -241,8 +242,8 @@ export function RepoPage({ repo }: { repo: string }) {
             sessions here: install Opticon, sign in, and autosync your clone. They show up once GitHub confirms you can
             push to the repo.
           </p>
-          <CopyCommand command={INSTALL_COMMAND} />
-          <CopyCommand command="opticon login && opticon autosync" />
+          <CopyCommand command={installCommand()} />
+          <CopyCommand command={`${loginCommand()} && opticon autosync`} />
         </div>
       )}
       {policy?.anonymous && <RepoBadge repo={repo} />}
@@ -257,7 +258,7 @@ function RepoBadge({ repo }: { repo: string }) {
     <section className="repo-badge">
       <h2>Badge</h2>
       <p className="dim">Link your README to this page. The badge counts the listed sessions anyone can open.</p>
-      {/* Previewed from the backend directly: only opticon.tv proxies /badge. */}
+      {/* Previewed from the backend directly, in case the web host doesn't proxy /badge. */}
       <img src={`${config.siteUrl}/badge/gh/${repo}.svg`} alt="Opticon sessions badge" />
       <CopyCommand command={markdown} prompt={false} />
     </section>

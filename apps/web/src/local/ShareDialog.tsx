@@ -1,6 +1,4 @@
 import { type SessionEvent, describeAccess } from "@opticon/core";
-import { api } from "@opticon/server/api";
-import { useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import {
   type Account,
@@ -17,6 +15,7 @@ import {
 } from "./api";
 import { isPrivate, useAccessEditor } from "../AccessEditor";
 import { Transcript } from "../Transcript";
+import { usePolicy } from "../policy";
 
 const RULE_LABELS: Record<string, string> = {
   "private-key": "private keys",
@@ -56,7 +55,8 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   const { access, empty: restrictedToNobody, editor } = useAccessEditor(share?.access);
   // Off by default: listing is a separate, deliberate choice from sharing.
   const [listed, setListed] = useState(share?.listed ?? false);
-  const policy = useQuery(api.instance.policy, {});
+  const policy = usePolicy();
+  const githubHost = new URL(policy?.githubUrl ?? "https://github.com").host;
   const autosyncAccess = policy ? describeAccess(policy.defaultAccess).toLowerCase() : "the default access";
 
   useEffect(() => {
@@ -160,7 +160,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
             </label>
             <p className="hint">
               Shared with {autosyncAccess} and listed on your profile
-              {autosyncRepo(autosync.rule?.repo ?? autosync.target) && (
+              {autosyncRepo(autosync.rule?.repo ?? autosync.target, githubHost) && (
                 <>, and on the repo's page once GitHub confirms you can push to it</>
               )}
               . Sessions active from now on upload about every 30 seconds, redacted but without this preview.
@@ -248,7 +248,7 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
   );
 }
 
-/** `owner/name` when an autosync target is a GitHub repo, which gets a repo page. */
-function autosyncRepo(target: string | undefined): string | undefined {
-  return target?.startsWith("github.com/") ? target.slice("github.com/".length) : undefined;
+/** `owner/name` when an autosync target is a repo on this instance's GitHub, which gets a repo page. */
+function autosyncRepo(target: string | undefined, githubHost: string): string | undefined {
+  return target?.startsWith(`${githubHost}/`) ? target.slice(githubHost.length + 1) : undefined;
 }

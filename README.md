@@ -48,15 +48,11 @@ Run `opticon autosync` in a project directory to share its sessions as you work.
 
 Unshare makes the uploaded copy private. Delete removes it and keeps autosync from uploading it again.
 
-## Running your own
+## Self hosting
 
-The backend is a Convex app in `apps/server`. These deployment environment variables limit an instance without changing what share settings mean:
+Run your own Opticon for an organization: sign-in limited to your GitHub org, sessions visible only to people who can read their repo. See the [self hosting guide](docs/self-hosting.md).
 
-- `OPTICON_ALLOWED_ORGS=acme`: only members of these GitHub orgs can sign in. Membership is re-checked hourly; people who leave are signed out.
-- `OPTICON_ANONYMOUS=0`: signed-out visitors can't open anything, including link shares, and there are no badges.
-- `OPTICON_SHARE_GRANTS=repo,people`: which kinds of access shares may use (`link`, `people`, `repo`). Others are refused and ignored on existing shares.
-
-Point the CLI at it with `opticon instance https://opticon.acme.dev`, then `opticon login`. Commands and the local app's Share button use the selected instance; `opticon instance` lists them and `opticon instance opticon.tv` switches back (the local app has a picker too). The daemon keeps syncing with every instance you're signed in to, whichever is selected. Sign-ins and autosync rules are kept per instance, so one instance's projects never go to another.
+Point the CLI at an instance with `opticon instance https://opticon.acme.dev`, then `opticon login`. The daemon syncs with every instance you're signed in to; commands and the local app use the selected one.
 
 ## Development
 

@@ -3,7 +3,8 @@ import { CliApprove } from "./CliApprove";
 import { Home, LocalExplainer, NotFound } from "./Pages";
 import { Shell } from "./Shell";
 import { isLocal, setPageTitle } from "./config";
-import { useIdentity } from "./identity";
+import { SignInButton, useIdentity } from "./identity";
+import { usePolicy } from "./policy";
 import { LocalSessions } from "./local/LocalSessions";
 import { type Route, useRoute } from "./router";
 import { Profile, RepoPage, ReposPage, UserProject } from "./shares/Discover";
@@ -17,7 +18,8 @@ import { ShareView } from "./shares/ShareView";
  */
 export function App() {
   const route = useRoute();
-  const { daemon, token } = useIdentity();
+  const { daemon, token, me } = useIdentity();
+  const policy = usePolicy();
   useImportLocalHistory(token);
 
   useEffect(() => {
@@ -26,6 +28,11 @@ export function App() {
 
   if (daemon && (daemon.status === "unauthorized" || daemon.status === "offline")) return <Blocked status={daemon.status} />;
   if (route.name === "local" && isLocal()) return <LocalSessions route={route} selected={route.key} />;
+  // Instances closed to signed-out visitors show nothing until you sign in. The CLI approval page
+  // has its own sign-in.
+  if (!isLocal() && policy?.anonymous === false && me === null && route.name !== "cli") {
+    return <SignInRequired allowedOrgs={policy.allowedOrgs} />;
+  }
   return <Shell route={route}>{page(route)}</Shell>;
 }
 
@@ -54,6 +61,22 @@ function page(route: Route) {
     case "not_found":
       return <NotFound />;
   }
+}
+
+function SignInRequired({ allowedOrgs }: { allowedOrgs: string[] }) {
+  return (
+    <div className="blocked">
+      <h2>Sign in to {location.host}</h2>
+      <p>
+        {allowedOrgs.length
+          ? `This Opticon is for members of ${allowedOrgs.join(", ")}. Sign in with your GitHub account.`
+          : "Sign in with GitHub to see sessions shared here."}
+      </p>
+      <div>
+        <SignInButton primary large />
+      </div>
+    </div>
+  );
 }
 
 function Blocked({ status }: { status: "unauthorized" | "offline" }) {

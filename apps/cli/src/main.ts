@@ -17,9 +17,9 @@ import { ConvexHttpClient } from "convex/browser";
 import {
   clearAuth,
   currentInstance,
-  defaultAccess,
   endpoints,
   instanceOverridden,
+  instancePolicy,
   instances,
   login,
   readAuth,
@@ -224,7 +224,8 @@ async function autosync() {
     console.log((await removeRule(rule)) ? `Stopped autosyncing ${describeRule(rule)}.` : `${describeRule(rule)} wasn't autosyncing.`);
     return;
   }
-  const rule = await newRule(target, await defaultAccess());
+  const policy = await instancePolicy();
+  const rule = await newRule(target, policy.defaultAccess);
   const who = describeAccess(rule.share ?? PRIVATE_ACCESS).toLowerCase();
   const question = `This will sync all of your sessions in ${describeRule(rule)} to ${currentInstance().name} and list them for ${who}.`;
   if (!args.includes("--yes")) {
@@ -239,9 +240,10 @@ async function autosync() {
   const auth = await readAuth();
   console.log(`Autosyncing ${describeRule(rule)}. Sessions active from now on are uploaded as they change.`);
   if (auth) console.log(`They'll be listed at ${endpoints().webUrl}/u/${auth.login} for ${who}. Unshare or delete any of them from My shares.`);
-  const repo = rule.repo?.startsWith("github.com/") ? rule.repo.slice("github.com/".length) : undefined;
-  if (auth && repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints().webUrl}/gh/${repo}.`);
-  else console.log("Not signed in yet: run `opticon login`.");
+  const githubHost = `${new URL(policy.githubUrl ?? "https://github.com").host.toLowerCase()}/`;
+  const repo = rule.repo?.startsWith(githubHost) ? rule.repo.slice(githubHost.length) : undefined;
+  if (!auth) console.log("Not signed in yet: run `opticon login`.");
+  else if (repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints().webUrl}/gh/${repo}.`);
   // The daemon does the syncing.
   await ensureDaemon();
 }

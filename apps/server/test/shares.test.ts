@@ -338,6 +338,77 @@ describe("instance policy", () => {
   });
 });
 
+describe("github sign-in and hosts", () => {
+  /** Stubs GitHub for one sign-in: the token exchange, the profile, and org memberships. */
+  async function withGithubLogin<R>(login: string, memberOf: string[], run: (calls: string[]) => Promise<R>) {
+    const calls: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/login/oauth/access_token")) return Response.json({ access_token: `gh-${login}` });
+      if (url.endsWith("/user")) return Response.json({ id: login.length * 7919, login, name: login });
+      const org = /\/user\/memberships\/orgs\/([^/]+)$/.exec(url)?.[1];
+      if (org) return memberOf.includes(org) ? Response.json({ state: "active" }) : new Response("Not Found", { status: 404 });
+      return new Response("Not Found", { status: 404 });
+    }) as unknown as typeof fetch;
+    try {
+      return await run(calls);
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  async function signInWithGithub(t: T) {
+    const start = await t.fetch("/auth/github/start?redirect=http://127.0.0.1:4747/");
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    return t.fetch(`/auth/github/callback?state=${state}&code=c`);
+  }
+
+  test("org-limited instances refuse non-members at sign-in and confirm members", async () => {
+    const t = convexTest(schema, modules);
+    await withEnv({ OPTICON_ALLOWED_ORGS: "acme", GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret" }, async () => {
+      const refused = await withGithubLogin("outsider", ["other"], () => signInWithGithub(t));
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).toContain("limited to members of acme");
+      expect(await t.run((ctx) => ctx.db.query("users").collect())).toEqual([]);
+
+      const allowed = await withGithubLogin("member", ["acme"], () => signInWithGithub(t));
+      expect(allowed.status).toBe(302);
+      const session = new URL(allowed.headers.get("location")!).hash.replace("#session=", "");
+      expect(await t.query(api.auth.me, { token: session })).toMatchObject({ login: "member" });
+    });
+  });
+
+  test("OPTICON_GITHUB_URL points sign-in, the API, and repo claims at GitHub Enterprise Server", async () => {
+    const t = convexTest(schema, modules);
+    await withEnv({ OPTICON_GITHUB_URL: "https://github.acme.com/", GITHUB_CLIENT_ID: "id" }, async () => {
+      expect((await t.query(api.instance.policy, {})).githubUrl).toBe("https://github.acme.com");
+      const start = await t.fetch("/auth/github/start");
+      expect(start.headers.get("location")).toStartWith("https://github.acme.com/login/oauth/authorize?");
+
+      const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+      const calls: string[] = [];
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        calls.push(String(input));
+        return Response.json({ full_name: "acme/app", private: true, permissions: { push: true, pull: true } });
+      }) as unknown as typeof fetch;
+      try {
+        const create = (sessionId: string, repo: string) =>
+          t.action(api.shares.create, { token: owner, protocol: PROTOCOL_VERSION, provider: "claude", sessionId, repo, access: LINK_ACCESS });
+        await create("s1", "github.acme.com/acme/app");
+        await create("s2", "github.com/acme/app");
+      } finally {
+        globalThis.fetch = original;
+      }
+      expect(calls).toEqual(["https://github.acme.com/api/v3/repos/acme/app"]);
+      const repos = await t.run(async (ctx) => (await ctx.db.query("shares").collect()).map((s) => s.repo ?? null));
+      expect(repos).toEqual(["acme/app", null]);
+    });
+  });
+});
+
 describe("presence and live demand", () => {
   test("a viewer's heartbeat creates demand, which expires without further heartbeats", async () => {
     const { t, owner, slug } = await setup();

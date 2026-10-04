@@ -1,6 +1,7 @@
 import { PRIVATE_ACCESS, SHARE_GRANTS, type ShareAccess, type ShareGrant, grantsOf } from "@opticon/core/protocol";
 import { ConvexError } from "convex/values";
 import { query } from "./_generated/server";
+import { githubUrl } from "./github";
 
 /**
  * Instance-wide limits, from the deployment's environment. They only ever narrow what a share's
@@ -53,11 +54,11 @@ export function defaultAccess(policy: InstancePolicy): ShareAccess {
   return PRIVATE_ACCESS;
 }
 
-/** For clients: which options to offer and how to explain them. */
+/** For clients: which options to offer and how to explain them, and where GitHub is. */
 export const policy = query({
   args: {},
   handler: async () => {
     const policy = instancePolicy();
-    return { ...policy, defaultAccess: defaultAccess(policy) };
+    return { ...policy, defaultAccess: defaultAccess(policy), githubUrl: githubUrl() };
   },
 });
