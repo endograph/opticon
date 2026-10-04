@@ -3,7 +3,8 @@ import { Mark } from "./Mark";
 import { GITHUB_URL, INSTALL_COMMAND, LOCAL_APP_URL, isLocal } from "./config";
 import { SignInButton, useIdentity } from "./identity";
 import { Link } from "./router";
-import { Feed } from "./shares/Discover";
+import { CopyCommand } from "./CopyCommand";
+import { ActiveRepos, Feed } from "./shares/Discover";
 
 /** The home page, on opticon.tv and in the local app (which skips the install steps). */
 export function Home() {
@@ -56,6 +57,7 @@ export function Home() {
         </section>
       )}
 
+      <ActiveRepos />
       <Feed />
 
       <footer className="home-footer">
@@ -124,29 +126,6 @@ function InstallDialog({ onClose }: { onClose: () => void }) {
         </button>
       </footer>
     </dialog>
-  );
-}
-
-function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="command">
-      <code>
-        <span className="prompt">$ </span>
-        {command}
-      </code>
-      <button
-        type="button"
-        className="button subtle small"
-        onClick={() => {
-          void navigator.clipboard.writeText(command);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }}
-      >
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
   );
 }
 

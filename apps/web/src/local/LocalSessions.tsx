@@ -4,7 +4,7 @@ import { Shell } from "../Shell";
 import { Transcript } from "../Transcript";
 import { formatTime, projectName } from "../format";
 import { useIdentity } from "../identity";
-import { type Route, navigate } from "../router";
+import { Link, type Route, navigate } from "../router";
 import { SessionList } from "./SessionList";
 import { ShareDialog } from "./ShareDialog";
 import { sessionKey, useSession } from "./api";
@@ -42,7 +42,7 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
       {!selected ? (
         <div className="empty">
           <h2>Local sessions</h2>
-          <p>Your Claude Code and Codex sessions, read straight from this machine. Pick one on the left.</p>
+          <p>Your Claude Code and Codex sessions, read straight from this machine. Pick one from the list.</p>
         </div>
       ) : (
         <>
@@ -51,7 +51,13 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
               <h1>{meta?.title ?? "Untitled session"}</h1>
               <div className="session-meta">
                 {meta && <ProviderIcon provider={meta.provider} />}
-                {meta?.cwd && <span title={meta.cwd}>{projectName(meta.cwd)}</span>}
+                {share?.repo ? (
+                  <Link href={`/gh/${share.repo}`} className="project-link" title="Public sessions in this repo">
+                    {share.repo}
+                  </Link>
+                ) : (
+                  meta?.cwd && <span title={meta.cwd}>{projectName(meta.cwd)}</span>
+                )}
                 {meta?.gitBranch && <span className="mono">{meta.gitBranch}</span>}
                 {meta?.startedAt && <span>{formatTime(meta.startedAt)}</span>}
               </div>

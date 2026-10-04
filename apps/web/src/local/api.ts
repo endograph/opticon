@@ -21,6 +21,9 @@ export interface MyShare {
   provider: SessionMeta["provider"];
   sessionId: string;
   title?: string;
+  project?: string;
+  /** Verified public GitHub repo, `owner/name`. */
+  repo?: string;
   access: ShareAccess;
   /** Created by autosync. */
   auto: boolean;

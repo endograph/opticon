@@ -5,9 +5,13 @@ import { useEffect } from "react";
 import { isLive, relativeTime, useNow } from "../format";
 import { Link } from "../router";
 import { ProviderIcon } from "../ProviderIcon";
-import { setPageTitle } from "../config";
+import { config, INSTALL_COMMAND, setPageTitle } from "../config";
+import { CopyCommand } from "../CopyCommand";
 
 type PublicShare = FunctionReturnType<typeof api.shares.feed>[number];
+type ActiveRepo = FunctionReturnType<typeof api.shares.activeRepos>[number];
+
+const HOME_REPOS = 6;
 
 export const projectHref = (login: string, project: string) => `/u/${login}/p/${encodeURIComponent(project)}`;
 
@@ -30,6 +34,73 @@ export function Feed() {
   );
 }
 
+/** The busiest repos this week, for the home page. */
+export function ActiveRepos() {
+  const repos = useQuery(api.shares.activeRepos, { limit: HOME_REPOS });
+  if (!repos?.length) return null;
+  return (
+    <section className="feed">
+      <h2>
+        Active repos <Link href="/repos" className="section-link">All repos</Link>
+      </h2>
+      <RepoList repos={repos} />
+    </section>
+  );
+}
+
+/** Every repo with public sessions this week. */
+export function ReposPage() {
+  const repos = useQuery(api.shares.activeRepos, {});
+  useEffect(() => {
+    setPageTitle("Repos");
+  }, []);
+  return (
+    <div className="page">
+      <header className="page-header">
+        <h1>Repos</h1>
+        <p className="dim">
+          Public GitHub repos with sessions this week, shared by people who can push to them. Sessions land here when
+          you autosync or share in a repo.
+        </p>
+      </header>
+      {repos === undefined ? (
+        <p className="hint">Loading…</p>
+      ) : repos.length ? (
+        <RepoList repos={repos} />
+      ) : (
+        <p className="hint">No repo has public sessions this week.</p>
+      )}
+    </div>
+  );
+}
+
+function RepoList({ repos }: { repos: ActiveRepo[] }) {
+  const now = useNow(30_000);
+  return (
+    <ul className="share-list">
+      {repos.map((r) => (
+        <li key={r.repo} className="share-row">
+          <div className="share-row-main">
+            <Link href={`/gh/${r.repo}`} className="share-row-title">
+              {r.repo}
+            </Link>
+            <div className="session-meta">
+              <span>
+                {r.sessions} {r.sessions === 1 ? "session" : "sessions"} this week
+              </span>
+              <span className="avatars" title={r.contributors.map((c) => c.login).join(", ")}>
+                {r.contributors.slice(0, 5).map((c) => (c.avatarUrl ? <img key={c.login} src={c.avatarUrl} alt={c.login} /> : null))}
+                {r.contributors.length} {r.contributors.length === 1 ? "contributor" : "contributors"}
+              </span>
+              <span>active {relativeTime(new Date(r.updatedAt).toISOString(), now)}</span>
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** A user's discoverable sessions. */
 export function Profile({ login }: { login: string }) {
   const profile = useQuery(api.shares.profile, { login });
@@ -40,8 +111,15 @@ export function Profile({ login }: { login: string }) {
   if (profile === undefined) return <p className="hint page">Loading…</p>;
   if (profile === null) return <NoSuchUser login={login} />;
   const { user, shares } = profile;
-  const projects = new Map<string, number>();
-  for (const s of shares) if (s.project) projects.set(s.project, (projects.get(s.project) ?? 0) + 1);
+  // A project with a verified repo links to the repo page, where everyone's sessions are.
+  const projects = new Map<string, { count: number; repo?: string }>();
+  for (const s of shares) {
+    if (!s.project) continue;
+    const entry = projects.get(s.project) ?? { count: 0 };
+    entry.count += 1;
+    entry.repo ??= s.repo;
+    projects.set(s.project, entry);
+  }
   return (
     <div className="page">
       <header className="page-header profile-header">
@@ -53,8 +131,13 @@ export function Profile({ login }: { login: string }) {
       </header>
       {projects.size > 0 && (
         <nav className="project-chips" aria-label="Projects">
-          {[...projects].map(([project, count]) => (
-            <Link key={project} href={projectHref(user.login, project)} className="project-chip">
+          {[...projects].map(([project, { count, repo }]) => (
+            <Link
+              key={project}
+              href={repo ? `/gh/${repo}` : projectHref(user.login, project)}
+              className="project-chip"
+              title={repo ? `Everyone's sessions in ${repo}` : undefined}
+            >
               {project}
               <span className="count">{count}</span>
             </Link>
@@ -133,9 +216,32 @@ export function RepoPage({ repo }: { repo: string }) {
       ) : shares.length ? (
         <PublicShareList shares={shares} showOwner hideProject />
       ) : (
-        <p className="hint">No public sessions in this repo yet.</p>
+        <div className="repo-empty">
+          <p>
+            <strong>No public sessions yet.</strong> Contribute to {repo}? Share your Claude Code and Codex sessions
+            here: install Opticon, sign in, and autosync your clone. They show up once GitHub confirms you can push to
+            the repo.
+          </p>
+          <CopyCommand command={INSTALL_COMMAND} />
+          <CopyCommand command="opticon login && opticon autosync" />
+        </div>
       )}
+      <RepoBadge repo={repo} />
     </div>
+  );
+}
+
+/** The README badge for a repo, with the snippet to copy. */
+function RepoBadge({ repo }: { repo: string }) {
+  const markdown = `[![Opticon sessions](${config.webUrl}/badge/gh/${repo}.svg)](${config.webUrl}/gh/${repo})`;
+  return (
+    <section className="repo-badge">
+      <h2>Badge</h2>
+      <p className="dim">Link your README to this page. The badge shows how many public sessions the repo has.</p>
+      {/* Previewed from the backend directly: only opticon.tv proxies /badge. */}
+      <img src={`${config.siteUrl}/badge/gh/${repo}.svg`} alt="Opticon sessions badge" />
+      <CopyCommand command={markdown} prompt={false} />
+    </section>
   );
 }
 

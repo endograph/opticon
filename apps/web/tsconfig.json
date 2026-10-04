@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "lib": ["ESNext", "DOM", "DOM.Iterable"], "jsx": "react-jsx" },
-  "include": ["src", "hosted-server.ts"]
+  "include": ["src", "functions", "hosted-server.ts"]
 }

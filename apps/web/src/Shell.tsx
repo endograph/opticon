@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { isLocal, placeLabel } from "./config";
 import { SignInButton, useIdentity } from "./identity";
@@ -10,8 +10,30 @@ import { FollowingSidebar } from "./shares/Following";
 /** The one layout for both modes: navigation, optional page sidebar content, account. */
 export function Shell(props: { route: Route; sidebar?: ReactNode; children: ReactNode }) {
   const active = props.route.name;
+  // On narrow screens the sidebar is a drawer. Any navigation closes it.
+  const [drawer, setDrawer] = useState(false);
+  const url = location.pathname + location.search;
+  useEffect(() => setDrawer(false), [url]);
+  useEffect(() => {
+    if (!drawer) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setDrawer(false);
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [drawer]);
+
   return (
-    <div className="app">
+    <div className="app" data-drawer={drawer || undefined}>
+      <header className="topbar">
+        <button type="button" className="menu-button" aria-label="Open navigation" aria-expanded={drawer} onClick={() => setDrawer(true)}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2 4h12M2 8h12M2 12h12" />
+          </svg>
+        </button>
+        <Link href="/" className="brand">
+          Opticon
+        </Link>
+      </header>
+      <div className="drawer-scrim" onClick={() => setDrawer(false)} />
       <nav className="sidebar">
         <div className="sidebar-nav">
           <div className="brand-row">
@@ -33,6 +55,9 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
           </Link>
           <Link href="/following" className="nav-item" aria-current={active === "following"}>
             Following
+          </Link>
+          <Link href="/repos" className="nav-item" aria-current={active === "repos" || active === "repo"}>
+            Repos
           </Link>
         </div>
         <div className="sidebar-content">

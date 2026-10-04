@@ -1,7 +1,8 @@
 import { httpRouter } from "convex/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { issueToken } from "./auth";
+import { sessionsBadge } from "./badge";
 import { randomToken, sha256 } from "./lib";
 
 /**
@@ -144,6 +145,20 @@ http.route({
     if (result.status !== "approved") return Response.json({ status: result.status });
     const token = await issueToken(ctx, result.userId, "cli", result.label);
     return Response.json({ status: "approved", token, login: result.login });
+  }),
+});
+
+/** README badge for a repo page: `/badge/gh/<owner>/<name>.svg`. opticon.tv proxies /badge/* here. */
+http.route({
+  pathPrefix: "/badge/gh/",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const repo = /^\/badge\/gh\/([\w.-]+\/[\w.-]+?)(?:\.svg)?$/.exec(new URL(req.url).pathname)?.[1];
+    if (!repo) return new Response("Not found", { status: 404 });
+    const { count, capped } = await ctx.runQuery(api.shares.repoSessionCount, { repo });
+    return new Response(sessionsBadge(count, capped), {
+      headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=600" },
+    });
   }),
 });
 

@@ -1,4 +1,4 @@
-[Website](https://opticon.tv)
+[Website](https://opticon.tv) [![Opticon sessions](https://opticon.tv/badge/gh/endograph/opticon.svg)](https://opticon.tv/gh/endograph/opticon)
 
 # opticon
 

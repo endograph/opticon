@@ -163,8 +163,11 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
               Autosync every session in <code>{autosync.rule ? (autosync.rule.repo ?? autosync.rule.path) : autosync.target}</code>
             </label>
             <p className="hint">
-              Public and listed on your profile. Sessions active from now on upload about every 30 seconds, redacted but
-              without this preview.
+              Public and listed on your profile
+              {autosyncRepo(autosync.rule?.repo ?? autosync.target) && (
+                <>, and on the repo's page once GitHub confirms you can push to it</>
+              )}
+              . Sessions active from now on upload about every 30 seconds, redacted but without this preview.
             </p>
           </div>
         )}
@@ -247,4 +250,9 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
       </footer>
     </dialog>
   );
+}
+
+/** `owner/name` when an autosync target is a GitHub repo, which gets a public repo page. */
+function autosyncRepo(target: string | undefined): string | undefined {
+  return target?.startsWith("github.com/") ? target.slice("github.com/".length) : undefined;
 }

@@ -15,6 +15,7 @@ const modules = {
   "../convex/access.ts": () => import("../convex/access"),
   "../convex/repos.ts": () => import("../convex/repos"),
   "../convex/crons.ts": () => import("../convex/crons"),
+  "../convex/badge.ts": () => import("../convex/badge"),
   "../convex/http.ts": () => import("../convex/http"),
 };
 
@@ -490,6 +491,34 @@ describe("repo pages", () => {
     expect(await t.query(api.shares.repoShares, { repo: "acme/app" })).toEqual([]);
     expect((await t.query(api.shares.repoShares, { repo: "acme/library" })).map((s) => s.title)).toEqual(["s2"]);
     expect((await t.run((ctx) => ctx.db.query("repoAccess").collect())).map((g) => g.repo)).toEqual(["acme/library"]);
+  });
+
+  test("active repos rank by sessions this week, and the badge counts a repo's listed sessions", async () => {
+    const t = convexTest(schema, modules);
+    const alice = await signIn(t, "alice", { githubToken: "gh-alice" });
+    const bob = await signIn(t, "bob", { githubToken: "gh-bob" });
+    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/lib": { full_name: "acme/lib", push: true } }, async () => {
+      await share(t, alice, "a1", "github.com/acme/app");
+      await share(t, bob, "b1", "github.com/acme/app");
+      await share(t, alice, "a2", "github.com/acme/lib");
+    });
+    await share(t, alice, "a3");
+    const active = await t.query(api.shares.activeRepos, {});
+    expect(active.map((r) => [r.repo, r.sessions, r.contributors.map((c) => c.login).sort()])).toEqual([
+      ["acme/app", 2, ["alice", "bob"]],
+      ["acme/lib", 1, ["alice"]],
+    ]);
+
+    const svg = async (path: string) => {
+      const res = await t.fetch(path);
+      return { status: res.status, type: res.headers.get("content-type"), body: await res.text() };
+    };
+    const app = await svg("/badge/gh/Acme/App.svg");
+    expect(app.status).toBe(200);
+    expect(app.type).toContain("image/svg+xml");
+    expect(app.body).toContain("<title>opticon: 2 sessions</title>");
+    expect((await svg("/badge/gh/acme/none.svg")).body).toContain("no sessions yet");
+    expect((await svg("/badge/gh/not-a-repo")).status).toBe(404);
   });
 
   test("a user's project page lists their discoverable shares in that project", async () => {

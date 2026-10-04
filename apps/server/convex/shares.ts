@@ -13,6 +13,10 @@ const CHANGES_PAGE = 500;
 const DELETE_BATCH = 500;
 const FEED_LIMIT = 30;
 const PROFILE_LIMIT = 100;
+const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/** Recent discoverable shares scanned to rank active repos. */
+const ACTIVE_SCAN = 2000;
+const BADGE_SCAN = 1000;
 
 const provider = v.union(v.literal("claude"), v.literal("codex"));
 
@@ -330,6 +334,50 @@ export const repoShares = query({
       .order("desc")
       .take(PROFILE_LIMIT);
     return Promise.all(shares.map((s) => publicSummary(ctx, s)));
+  },
+});
+
+/**
+ * Repos with discoverable sessions active in the last week, busiest first. Computed from recent
+ * shares rather than stored counters, so it can't drift.
+ */
+export const activeRepos = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit = 50 }) => {
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_discoverable", (q) => q.eq("discoverable", true).gt("updatedAt", Date.now() - ACTIVE_WINDOW_MS))
+      .order("desc")
+      .take(ACTIVE_SCAN);
+    const repos = new Map<string, { repo: string; sessions: number; owners: Set<Id<"users">>; updatedAt: number }>();
+    for (const s of shares) {
+      if (!s.repo) continue;
+      const entry = repos.get(s.repo) ?? { repo: s.repo, sessions: 0, owners: new Set(), updatedAt: s.updatedAt };
+      entry.sessions += 1;
+      entry.owners.add(s.ownerId);
+      repos.set(s.repo, entry);
+    }
+    const ranked = [...repos.values()].sort((a, b) => b.sessions - a.sessions || b.updatedAt - a.updatedAt).slice(0, limit);
+    return Promise.all(
+      ranked.map(async ({ owners, ...entry }) => ({
+        ...entry,
+        contributors: (await Promise.all([...owners].map((id) => ctx.db.get(id))))
+          .filter((u) => u !== null)
+          .map((u) => ({ login: u.login, avatarUrl: u.avatarUrl })),
+      })),
+    );
+  },
+});
+
+/** How many discoverable sessions a repo has, for its README badge. `capped` when there are more. */
+export const repoSessionCount = query({
+  args: { repo: v.string() },
+  handler: async (ctx, { repo }) => {
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_repo_discoverable", (q) => q.eq("repo", repo.toLowerCase()).eq("discoverable", true))
+      .take(BADGE_SCAN);
+    return { count: shares.length, capped: shares.length === BADGE_SCAN };
   },
 });
 

@@ -183,6 +183,8 @@ async function autosync() {
   const auth = await readAuth();
   console.log(`Autosyncing ${describeRule(rule)}. Sessions active from now on are uploaded as they change.`);
   if (auth) console.log(`They'll be listed at ${endpoints()?.webUrl}/u/${auth.login}. Unshare or delete any of them from My shares.`);
+  const repo = rule.repo?.startsWith("github.com/") ? rule.repo.slice("github.com/".length) : undefined;
+  if (auth && repo) console.log(`Once GitHub confirms you can push to ${repo}, they'll also be on ${endpoints()?.webUrl}/gh/${repo}.`);
   else console.log("Not signed in yet: run `opticon login`.");
   // The daemon does the syncing.
   await ensureDaemon();
