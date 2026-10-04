@@ -13,19 +13,33 @@ export function SessionList(props: {
   selected?: string;
   onSelect: (key: string) => void;
 }) {
+  const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
+  const [project, setProject] = useState<string>();
   const [provider, setProvider] = useState<Provider | "all">("all");
   const [limit, setLimit] = useState(PAGE);
   const now = useNow(30_000);
+
+  // Distinct project directories, most recently active first (sessions arrive newest first).
+  const projects = useMemo(
+    () => [...new Set(props.sessions.flatMap((s) => (s.cwd ? [s.cwd] : [])))],
+    [props.sessions],
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return props.sessions.filter(
       (s) =>
         (provider === "all" || s.provider === provider) &&
+        (!project || s.cwd === project) &&
         (!q || s.title?.toLowerCase().includes(q) || s.cwd?.toLowerCase().includes(q)),
     );
-  }, [props.sessions, query, provider]);
+  }, [props.sessions, query, provider, project]);
+
+  const closeSearch = () => {
+    setSearching(false);
+    setQuery("");
+  };
 
   const groups: [string, SessionMeta[]][] = [];
   for (const s of filtered.slice(0, limit)) {
@@ -37,20 +51,65 @@ export function SessionList(props: {
   return (
     <>
       <div className="sidebar-top">
-        <input
-          className="search"
-          placeholder="Search sessions"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search sessions"
-        />
-        <div className="segmented" role="tablist">
-          {(["all", "claude", "codex"] as const).map((p) => (
-            <button key={p} type="button" role="tab" aria-selected={provider === p} onClick={() => setProvider(p)}>
-              {p === "all" ? "All" : <ProviderIcon provider={p} />}
-            </button>
-          ))}
+        <div className="filter-row">
+          <div className="segmented" role="tablist">
+            {(["all", "claude", "codex"] as const).map((p) => (
+              <button key={p} type="button" role="tab" aria-selected={provider === p} onClick={() => setProvider(p)}>
+                {p === "all" ? "All" : <ProviderIcon provider={p} />}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="filter-button"
+            aria-label="Search sessions"
+            title="Search sessions"
+            aria-pressed={searching}
+            onClick={() => (searching ? closeSearch() : setSearching(true))}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="m10.4 10.4 3.6 3.6" />
+            </svg>
+          </button>
+          {/* The select sits invisibly over the icon so a click opens the native picker directly. */}
+          <label className="filter-button" title="Filter by project" data-active={!!project}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M1.5 4a1 1 0 0 1 1-1h3.6l1.5 1.6h5.9a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" />
+            </svg>
+            <select aria-label="Filter by project" value={project ?? ""} onChange={(e) => setProject(e.target.value || undefined)}>
+              <option value="">All projects</option>
+              {projects.map((cwd) => (
+                <option key={cwd} value={cwd}>
+                  {projectName(cwd)}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
+        {searching && (
+          <input
+            className="search"
+            placeholder="Search sessions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && closeSearch()}
+            aria-label="Search sessions"
+            autoFocus
+          />
+        )}
+        {project && (
+          <div className="filter-chips">
+            <span className="chip" title={project}>
+              <span className="truncate">{projectName(project)}</span>
+              <button type="button" aria-label="Clear project filter" onClick={() => setProject(undefined)}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="m4.5 4.5 7 7m0-7-7 7" />
+                </svg>
+              </button>
+            </span>
+          </div>
+        )}
       </div>
       <div className="session-list">
         {props.loading && !props.sessions.length && <p className="hint">Indexing sessions…</p>}
