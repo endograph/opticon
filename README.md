@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/endograph/opticon/main/favicon.svg" alt="opticon" width="120" />
+  <img src="https://raw.githubusercontent.com/endograph/opticon/main/apps/web/favicon.svg" alt="opticon" width="120" />
 </p>
 
 <p align="center">
