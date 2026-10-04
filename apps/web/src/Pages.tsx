@@ -1,5 +1,3 @@
-import { api } from "@opticon/server/api";
-import { useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { Mark } from "./Mark";
 import { GITHUB_URL, INSTALL_COMMAND, LOCAL_APP_URL, isLocal } from "./config";
@@ -10,11 +8,8 @@ import { Feed } from "./shares/Discover";
 /** The home page, on opticon.tv and in the local app (which skips the install steps). */
 export function Home() {
   const [installing, setInstalling] = useState(false);
-  const { token, daemon } = useIdentity();
-  const me = useQuery(api.auth.me, token ? { token } : "skip");
-  // Wait for an answer before offering sign-in, so signed-in users never see it flash. The
-  // local app signs in through the CLI, so the daemon knows; opticon.tv asks Convex.
-  const signedOut = isLocal() ? daemon?.account?.signedIn === false : !token || me === null;
+  const { me } = useIdentity();
+  const signedOut = me === null;
 
   return (
     <div className="page home">

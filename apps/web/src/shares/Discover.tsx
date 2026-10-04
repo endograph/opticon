@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { isLive, relativeTime, useNow } from "../format";
 import { Link } from "../router";
 import { ProviderIcon } from "../ProviderIcon";
+import { setPageTitle } from "../config";
 
 type PublicShare = FunctionReturnType<typeof api.shares.feed>[number];
 
@@ -24,7 +25,7 @@ export function Feed() {
 export function Profile({ login }: { login: string }) {
   const profile = useQuery(api.shares.profile, { login });
   useEffect(() => {
-    document.title = `${login} · Opticon`;
+    setPageTitle(login);
   }, [login]);
 
   if (profile === undefined) return <p className="hint page">Loading…</p>;

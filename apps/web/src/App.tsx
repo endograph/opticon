@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { CliApprove } from "./CliApprove";
 import { Home, LocalExplainer, NotFound } from "./Pages";
 import { Shell } from "./Shell";
-import { isLocal } from "./config";
+import { isLocal, setPageTitle } from "./config";
 import { useIdentity } from "./identity";
 import { LocalSessions } from "./local/LocalSessions";
 import { type Route, useRoute } from "./router";
@@ -21,7 +21,7 @@ export function App() {
   useImportLocalHistory(token);
 
   useEffect(() => {
-    if (route.name !== "local" && route.name !== "share") document.title = "Opticon";
+    if (route.name !== "local" && route.name !== "share") setPageTitle();
   }, [route.name]);
 
   if (daemon && (daemon.status === "unauthorized" || daemon.status === "offline")) return <Blocked status={daemon.status} />;

@@ -1,7 +1,9 @@
-import { type ReactNode, createContext, useContext, useEffect, useState } from "react";
+import { api } from "@opticon/server/api";
+import { useQuery } from "convex/react";
+import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { config, isLocal } from "./config";
 import { type Daemon, useDaemonState } from "./local/api";
-import { signIn, useSessionToken } from "./session";
+import { type SessionUser, cacheUser, getSession, getSessionUser, signIn, signOut, useSessionToken } from "./session";
 
 /**
  * Who the page acts as when talking to Convex.
@@ -12,11 +14,13 @@ import { signIn, useSessionToken } from "./session";
  */
 interface Identity {
   token?: string;
+  /** Undefined while checking auth; null when signed out. May initially be cached for display. */
+  me: SessionUser | null | undefined;
   /** The local daemon's state. Undefined on opticon.tv. */
   daemon?: Daemon;
 }
 
-const IdentityContext = createContext<Identity>({});
+const IdentityContext = createContext<Identity>({ me: undefined });
 
 export const useIdentity = () => useContext(IdentityContext);
 export const useToken = () => useContext(IdentityContext).token;
@@ -27,30 +31,44 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
 
 function HostedIdentity({ children }: { children: ReactNode }) {
   const token = useSessionToken();
-  return <IdentityContext.Provider value={{ token }}>{children}</IdentityContext.Provider>;
+  const confirmed = useQuery(api.auth.me, token ? { token } : "skip");
+  const me = useMemo(() => getSessionUser(token, config.convexUrl, confirmed), [token, confirmed]);
+
+  useEffect(() => {
+    if (!token || confirmed === undefined || getSession() !== token) return;
+    if (confirmed === null) signOut();
+    else cacheUser(token, config.convexUrl, confirmed);
+  }, [token, confirmed]);
+
+  return <IdentityContext.Provider value={{ token: me === null ? undefined : token, me }}>{children}</IdentityContext.Provider>;
 }
 
 function LocalIdentity({ children }: { children: ReactNode }) {
   const daemon = useDaemonState();
-  const [token, setToken] = useState<string>();
+  const [session, setSession] = useState<{ login: string; token?: string }>();
   const login = daemon.account?.signedIn ? daemon.account.login : undefined;
+  const token = login && session?.login === login ? session.token : undefined;
+  const confirmed = useQuery(api.auth.me, token ? { token } : "skip");
+  const me = daemon.account?.signedIn === false ? null : confirmed;
 
   // Re-fetch whenever the CLI signs in, out, or as someone else.
   useEffect(() => {
-    if (!login) return setToken(undefined);
+    if (!login) return setSession(undefined);
     let cancelled = false;
     void fetch("/api/convex-token")
       .then((r) => (r.ok ? (r.json() as Promise<{ token: string | null }>) : { token: null }))
-      .then(({ token }) => !cancelled && setToken(token ?? undefined));
+      .then(({ token }) => !cancelled && setSession({ login, token: token ?? undefined }));
     return () => {
       cancelled = true;
     };
   }, [login]);
 
-  return <IdentityContext.Provider value={{ token, daemon }}>{children}</IdentityContext.Provider>;
+  return <IdentityContext.Provider value={{ token, daemon, me }}>{children}</IdentityContext.Provider>;
 }
 
 export function SignInButton({ primary, large }: { primary?: boolean; large?: boolean }) {
+  const { me } = useIdentity();
+  if (me !== null) return null;
   if (isLocal()) {
     return (
       <span className="hint">

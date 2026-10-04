@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { PROTOCOL_VERSION, type ShareAccess, normalizeAccess, projectSessionForShare } from "@opticon/core";
 import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
@@ -29,6 +30,9 @@ export async function startServer(options: DaemonOptions) {
   // This machine's MagicDNS name is controlled by Tailscale, not by an attacker, so allowing it
   // doesn't reopen DNS rebinding. Requests still need the cookie.
   const tailnetHost = await tailnetHostname();
+  // Shown in the local app so it's clear which machine's sessions you're looking at: the tailnet
+  // name ("fox") when there is one, else the hostname without its domain.
+  const machine = tailnetHost?.split(".")[0] ?? hostname().split(".")[0];
   const hostAllowed = (host: string) =>
     allowedHosts.has(host) || (!!tailnetHost && (host === tailnetHost || host.startsWith(`${tailnetHost}:`)));
 
@@ -72,7 +76,7 @@ export async function startServer(options: DaemonOptions) {
       /** Same shape opticon.tv serves statically, so one web app runs in both places. */
       "/config.json": () => {
         const ep = endpoints();
-        return Response.json({ mode: "local", convexUrl: ep?.convexUrl, siteUrl: ep?.siteUrl, webUrl: ep?.webUrl });
+        return Response.json({ mode: "local", machine, convexUrl: ep?.convexUrl, siteUrl: ep?.siteUrl, webUrl: ep?.webUrl });
       },
 
       /**

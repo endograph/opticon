@@ -9,6 +9,7 @@ import { SessionList } from "./SessionList";
 import { ShareDialog } from "./ShareDialog";
 import { sessionKey, useSession } from "./api";
 import { ProviderIcon } from "../ProviderIcon";
+import { setPageTitle } from "../config";
 
 /** This machine's sessions. Only rendered in the local app, which is served by the daemon. */
 export function LocalSessions({ route, selected }: { route: Route; selected?: string }) {
@@ -22,7 +23,7 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   const sharedKeys = new Set(shares.filter((s) => !isPrivate(s.access)).map((s) => `${s.provider}/${s.sessionId}`));
   const share = shares.find((s) => `${s.provider}/${s.sessionId}` === selected);
   useEffect(() => {
-    document.title = meta?.title ? `${meta.title} · Opticon` : "Opticon";
+    setPageTitle(meta?.title);
   }, [meta?.title]);
 
   return (

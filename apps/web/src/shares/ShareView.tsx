@@ -3,7 +3,7 @@ import { api } from "@opticon/server/api";
 import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
 import { Transcript } from "../Transcript";
-import { isLocal } from "../config";
+import { isLocal, setPageTitle } from "../config";
 import { formatTime } from "../format";
 import { SignInButton, useToken } from "../identity";
 import { Link } from "../router";
@@ -23,7 +23,7 @@ export function ShareView({ slug }: { slug: string }) {
   useMembershipRefresh(token, view?.status === "forbidden" && view.stale);
 
   useEffect(() => {
-    document.title = ok && view.share.title ? `${view.share.title} · Opticon` : "Opticon";
+    setPageTitle(ok ? view.share.title : undefined);
   }, [ok, ok && view.share.title]);
 
   if (!view) return <p className="hint pad">Loading…</p>;

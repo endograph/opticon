@@ -11,6 +11,8 @@ export interface AppConfig {
   webUrl: string;
   /** Show the passwordless dev sign-in instead of GitHub. Only true against a dev backend. */
   devAuth?: boolean;
+  /** The local app's machine name, e.g. "fox". Local mode only. */
+  machine?: string;
 }
 
 export let config: AppConfig;
@@ -22,6 +24,31 @@ export async function loadConfig(): Promise<AppConfig> {
 }
 
 export const isLocal = () => config.mode === "local";
+
+/** "Opticon on fox" in the local app, "opticon.tv" when hosted. */
+export const placeLabel = () => (isLocal() ? `Local · ${config.machine ?? "this machine"}` : location.host);
+
+/**
+ * Tab titles. The local app ends with its machine instead of "Opticon", so a tab says where it
+ * lives: "Fix build · fox" versus "Fix build · Opticon".
+ */
+export function setPageTitle(title?: string): void {
+  const suffix = isLocal() ? (config.machine ?? "local") : "Opticon";
+  document.title = title ? `${title} · ${suffix}` : isLocal() ? `Opticon · ${suffix}` : "Opticon";
+}
+
+/** The local app draws its favicon in the "local" green, so its tabs stand apart from opticon.tv. */
+export function applyLocalFavicon(): void {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  const prefix = "data:image/svg+xml,";
+  if (!link?.href.startsWith(prefix)) return;
+  const svg = decodeURIComponent(link.href.slice(prefix.length))
+    .replace(/#1d1d1b/gi, LOCAL_GREEN.light)
+    .replace(/#e9e9e6/gi, LOCAL_GREEN.dark);
+  link.href = prefix + encodeURIComponent(svg);
+}
+
+export const LOCAL_GREEN = { light: "#15803d", dark: "#4ade80" };
 
 /** The address of the local app, for links from opticon.tv. */
 export const LOCAL_APP_URL = "http://127.0.0.1:4317";

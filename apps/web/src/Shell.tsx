@@ -1,8 +1,6 @@
-import { api } from "@opticon/server/api";
-import { useQuery } from "convex/react";
 import type { ReactNode } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { isLocal } from "./config";
+import { isLocal, placeLabel } from "./config";
 import { SignInButton, useIdentity } from "./identity";
 import { Link, type Route } from "./router";
 import { signOut } from "./session";
@@ -21,6 +19,11 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
               Opticon
             </Link>
             <ThemeButton />
+          </div>
+          {/* Where you are: this machine's local app, or opticon.tv. Same app either way. */}
+          <div className={`place ${isLocal() ? "local" : "hosted"}`} title={isLocal() ? "Sessions on this machine" : undefined}>
+            {isLocal() && <span className="place-dot" />}
+            {placeLabel()}
           </div>
           <Link href="/local" className="nav-item" aria-current={active === "local"}>
             Local sessions
@@ -89,13 +92,13 @@ function ThemeButton() {
 }
 
 function AccountFooter() {
-  const { token, daemon } = useIdentity();
-  const me = useQuery(api.auth.me, token ? { token } : "skip");
+  const { me, daemon } = useIdentity();
 
   if (isLocal() && daemon?.account?.error && !daemon.account.signedIn) {
     return <p className="hint">{daemon.account.error}</p>;
   }
-  if (!token || !me) return <SignInButton />;
+  if (me === undefined) return null;
+  if (me === null) return <SignInButton />;
   return (
     <div className="account">
       <span className="me truncate">

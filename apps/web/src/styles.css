@@ -1146,15 +1146,19 @@ a.owner:hover {
 .hero-mark {
   display: block;
   color: var(--text);
-  margin: 0 auto -14px;
+  margin: 0 auto -12px;
   transform: scaleY(-1);
 }
 
 .page.home .hero h1 {
+  position: relative;
   font-size: 36px;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.025em;
   margin: 0;
   font-weight: 750;
+  /* Knock out the icon around the letter tops, then paint the letters at their full weight. */
+  -webkit-text-stroke: 14px var(--bg);
+  paint-order: stroke fill;
 }
 
 .lede {
@@ -1452,4 +1456,37 @@ a.owner:hover {
 .discoverable .toggle:has(input:disabled) {
   color: var(--faint);
   cursor: default;
+}
+
+/* Where you are: "Local · fox" with a green dot in the local app, "opticon.tv" when hosted. */
+.place {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 8px;
+  margin-top: -4px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.place.local {
+  color: var(--dim);
+}
+
+.place-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #15803d;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #15803d 18%, transparent);
+}
+
+:root[data-theme="dark"] .place-dot {
+  background: #4ade80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .place-dot {
+    background: #4ade80;
+  }
 }
