@@ -54,6 +54,30 @@ export const create = action({
   },
 });
 
+/**
+ * Links an existing share to its repo, for shares created before the daemon sent one. Same
+ * verification as `create`; `project` is renamed along with it, since repo shares use the repo name.
+ */
+export const claimRepo = action({
+  args: { token: v.string(), protocol: v.number(), shareId: v.id("shares"), repo: v.string(), project: v.optional(v.string()) },
+  handler: async (ctx, { token, protocol, shareId, repo: claim, project }): Promise<{ repo: string | null }> => {
+    requireProtocol(protocol);
+    const repo = await verifyRepoClaim(ctx, token, claim);
+    if (repo === undefined) throw new ConvexError({ code: "github_unavailable" });
+    await ctx.runMutation(internal.shares.setOwnRepo, { token, shareId, ...(repo ? { repo, project } : {}) });
+    return { repo };
+  },
+});
+
+export const setOwnRepo = internalMutation({
+  args: { token: v.string(), shareId: v.id("shares"), repo: v.optional(v.string()), project: v.optional(v.string()) },
+  handler: async (ctx, { token, shareId, repo, project }) => {
+    const share = await ownShare(ctx, token, shareId);
+    if (!repo) return;
+    await ctx.db.patch(share._id, { repo, ...(project ? { project } : {}) });
+  },
+});
+
 export const setRepo = internalMutation({
   args: { shareId: v.id("shares"), repo: v.optional(v.string()) },
   handler: async (ctx, { shareId, repo }) => {

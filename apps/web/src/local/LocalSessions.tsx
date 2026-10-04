@@ -7,13 +7,15 @@ import { useIdentity } from "../identity";
 import { Link, type Route, navigate } from "../router";
 import { SessionList } from "./SessionList";
 import { ShareDialog } from "./ShareDialog";
-import { sessionKey, useSession } from "./api";
+import { sessionKey, useSession, useSessionRepo } from "./api";
+import { projectHref } from "../shares/Discover";
 import { ProviderIcon } from "../ProviderIcon";
 import { setPageTitle } from "../config";
 
 /** This machine's sessions. Only rendered in the local app, which is served by the daemon. */
 export function LocalSessions({ route, selected }: { route: Route; selected?: string }) {
-  const daemon = useIdentity().daemon!;
+  const { daemon: daemonState, me } = useIdentity();
+  const daemon = daemonState!;
   const { sessions, status, account, shares } = daemon;
   const session = useSession(selected);
   const [sharing, setSharing] = useState(false);
@@ -22,6 +24,9 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   // Private copies (unshared, or auto synced without sharing) aren't marked as shared.
   const sharedKeys = new Set(shares.filter((s) => !isPrivate(s.access)).map((s) => `${s.provider}/${s.sessionId}`));
   const share = shares.find((s) => `${s.provider}/${s.sessionId}` === selected);
+  // The verified (canonical) repo once shared, else the local remote.
+  const localRepo = useSessionRepo(selected);
+  const repo = share?.repo ?? localRepo;
   useEffect(() => {
     setPageTitle(meta?.title);
   }, [meta?.title]);
@@ -51,14 +56,31 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
               <h1>{meta?.title ?? "Untitled session"}</h1>
               <div className="session-meta">
                 {meta && <ProviderIcon provider={meta.provider} />}
-                {share?.repo ? (
-                  <Link href={`/gh/${share.repo}`} className="project-link" title="Public sessions in this repo">
-                    {share.repo}
+                {repo ? (
+                  <Link href={`/gh/${repo}`} className="project-link" title={`Public sessions in ${repo}`}>
+                    {repo}
+                  </Link>
+                ) : meta?.cwd && me ? (
+                  <Link href={projectHref(me.login, projectName(meta.cwd))} className="project-link" title={meta.cwd}>
+                    {projectName(meta.cwd)}
                   </Link>
                 ) : (
                   meta?.cwd && <span title={meta.cwd}>{projectName(meta.cwd)}</span>
                 )}
-                {meta?.gitBranch && <span className="mono">{meta.gitBranch}</span>}
+                {meta?.gitBranch &&
+                  (repo ? (
+                    <a
+                      className="mono project-link"
+                      href={`https://github.com/${repo}/tree/${encodeURI(meta.gitBranch)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Branch on GitHub"
+                    >
+                      {meta.gitBranch}
+                    </a>
+                  ) : (
+                    <span className="mono">{meta.gitBranch}</span>
+                  ))}
                 {meta?.startedAt && <span>{formatTime(meta.startedAt)}</span>}
               </div>
             </div>

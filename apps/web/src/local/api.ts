@@ -103,6 +103,23 @@ export function useSession(key: string | undefined) {
   return state;
 }
 
+/** The session's GitHub repo (`owner/name`) from its git remote; null when it has none. */
+export function useSessionRepo(key: string | undefined): string | null {
+  const [repo, setRepo] = useState<{ key: string; repo: string | null }>();
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    fetch(`/api/sessions/${key}/repo`)
+      .then((res) => (res.ok ? res.json() : { repo: null }))
+      .then((data: { repo: string | null }) => !cancelled && setRepo({ key, repo: data.repo }))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return repo && repo.key === key ? repo.repo : null;
+}
+
 export type SharePreview = SharedSessionProjection;
 
 export async function fetchSharePreview(key: string): Promise<SharePreview> {

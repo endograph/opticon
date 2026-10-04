@@ -521,6 +521,21 @@ describe("repo pages", () => {
     expect((await svg("/badge/gh/not-a-repo")).status).toBe(404);
   });
 
+  test("claimRepo links an existing share after verification, and only for its owner", async () => {
+    const t = convexTest(schema, modules);
+    const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
+    const mallory = await signIn(t, "mallory", { githubToken: "gh-mallory" });
+    const { shareId } = await share(t, owner, "s1");
+    const claim = (token: string, repo: string) =>
+      t.action(api.shares.claimRepo, { token, protocol: PROTOCOL_VERSION, shareId, repo, project: "app" });
+    await withGithub({ "acme/app": { full_name: "acme/app", push: true }, "acme/secret": { full_name: "acme/secret", private: true, push: true } }, async () => {
+      expect(await claim(owner, "github.com/acme/secret")).toEqual({ repo: null });
+      await expect(claim(mallory, "github.com/acme/app")).rejects.toThrow();
+      expect(await claim(owner, "github.com/acme/app")).toEqual({ repo: "acme/app" });
+    });
+    expect((await t.query(api.shares.repoShares, { repo: "acme/app" })).map((s) => [s.title, s.project])).toEqual([["s1", "app"]]);
+  });
+
   test("a user's project page lists their discoverable shares in that project", async () => {
     const t = convexTest(schema, modules);
     const owner = await signIn(t, "owner");

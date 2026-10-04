@@ -60,6 +60,9 @@ export class ShareSync {
   private autoTimers = new Map<SessionKey, Timer>();
   private autoQueue: Promise<void> = Promise.resolve();
   private repos = new Map<string, Promise<string | undefined>>();
+  /** Shares this run already tried to link to their repo; see claimRepos. */
+  private repoClaims = new Set<string>();
+  private claimQueue: Promise<void> = Promise.resolve();
   rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
   account: AccountState = { configured: !!endpoints(), signedIn: false, liveSync: true, webUrl: endpoints()?.webUrl };
@@ -133,6 +136,32 @@ export class ShareSync {
     return { slug, url: this.urlFor(slug) };
   }
 
+  /**
+   * Shares created before the daemon sent repos have none. Claim each one's GitHub repo, once per
+   * run, so it can appear on the repo page; the server verifies push access as for new shares.
+   */
+  private claimRepos(shares: MyShare[]): void {
+    for (const share of shares) {
+      if (share.repo || this.repoClaims.has(share.shareId)) continue;
+      this.repoClaims.add(share.shareId);
+      this.claimQueue = this.claimQueue
+        .then(async () => {
+          const cwd = this.store.get(keyOf({ provider: share.provider, id: share.sessionId }))?.cwd;
+          const remote = cwd ? await this.repoFor(cwd) : undefined;
+          if (!remote?.startsWith("github.com/")) return;
+          const { client, auth } = this.requireClient();
+          await client.action(api.shares.claimRepo, {
+            token: auth.token,
+            protocol: PROTOCOL_VERSION,
+            shareId: share.shareId,
+            repo: remote,
+            project: remote.split("/").at(-1),
+          });
+        })
+        .catch((error: Error) => console.error(`Repo claim failed (${share.shareId}): ${error.message}`));
+    }
+  }
+
   /** Makes a share private. The copy stays on the server and keeps syncing. */
   async unshare(shareId: string): Promise<void> {
     const { client, auth } = this.requireClient();
@@ -185,6 +214,7 @@ export class ShareSync {
           // A share deleted elsewhere (e.g. on opticon.tv) lost its events; forget what we sent.
           const live = new Set(shares.map((s) => s.shareId as string));
           for (const shareId of this.uploaded.keys()) if (!live.has(shareId)) this.uploaded.delete(shareId);
+          this.claimRepos(shares);
           this.emit();
         },
         onError,
@@ -209,6 +239,7 @@ export class ShareSync {
     this.client = undefined;
     this.shares = [];
     this.deleted.clear();
+    this.repoClaims.clear();
   }
 
   private requireClient(): { client: ConvexClient; auth: Auth } {
@@ -231,7 +262,7 @@ export class ShareSync {
   }
 
   /** The normalized origin remote of `cwd`, looked up once per directory. */
-  private repoFor(cwd: string): Promise<string | undefined> {
+  repoFor(cwd: string): Promise<string | undefined> {
     const repo = this.repos.get(cwd) ?? repoOf(cwd);
     this.repos.set(cwd, repo);
     return repo;

@@ -172,6 +172,13 @@ export async function startServer(options: DaemonOptions) {
         return Response.json({ rule: rule ?? null, target: describeRule(target) });
       }),
 
+      /** The session's GitHub repo as `owner/name`, from its origin remote, or null. */
+      "/api/sessions/:provider/:id/repo": guard(async (req) => {
+        const cwd = store.get(sessionKey(req))?.cwd;
+        const remote = cwd ? await sync.repoFor(cwd) : undefined;
+        return Response.json({ repo: remote?.startsWith("github.com/") ? remote.slice("github.com/".length) : null });
+      }),
+
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {
         const result = await store.events(sessionKey(req));
         if (!result) return Response.json({ error: "not found" }, { status: 404 });
