@@ -1144,8 +1144,10 @@ a.owner:hover {
 }
 
 .hero-mark {
+  display: block;
   color: var(--text);
-  margin-bottom: 14px;
+  margin: 0 auto -14px;
+  transform: scaleY(-1);
 }
 
 .page.home .hero h1 {
