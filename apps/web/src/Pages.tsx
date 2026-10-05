@@ -15,12 +15,12 @@ export function Home() {
   return (
     <div className="page home">
       <section className="hero">
-        <Mark className="hero-mark" size={128} />
-        <h1>
-          <span className="hero-cutout" aria-hidden="true">
-            Opticon
+        <Mark className="hero-mark" size={128} animate />
+        <h1 aria-label="Opticon">
+          <span className="hero-cutout" aria-hidden="true" style={{ textShadow: CUTOUT_SHADOW }}>
+            <HeroName />
           </span>
-          Opticon
+          <HeroName />
         </h1>
         <p className="lede">Share your agent sessions</p>
         <div className="hero-actions">
@@ -72,6 +72,27 @@ export function Home() {
 
       {installing && <InstallDialog onClose={() => setInstalling(false)} />}
     </div>
+  );
+}
+
+/** A round 10px clearance around every letter: copies of the word in rings around it. */
+const CUTOUT_SHADOW = [3, 6, 8.5, 10]
+  .flatMap((r) => {
+    // Enough copies on each ring that the outer edge reads as a smooth curve.
+    const copies = Math.ceil(r * 7);
+    return Array.from({ length: copies }, (_, i) => {
+      const a = (i / copies) * 2 * Math.PI;
+      return `${(r * Math.cos(a)).toFixed(2)}px ${(r * Math.sin(a)).toFixed(2)}px 0 var(--bg)`;
+    });
+  })
+  .join(", ");
+
+/** The name split around a dotless ı, which sits on the mark's centre line under the lodge. */
+function HeroName() {
+  return (
+    <>
+      <span className="hero-left">Opt</span>ı<span>con</span>
+    </>
   );
 }
 

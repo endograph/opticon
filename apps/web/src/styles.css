@@ -1312,20 +1312,10 @@ a.project-chip:hover {
 
 /* Home (opticon.tv) */
 
-/* Vertically centred. Auto margins rather than justify-content, which would clip the top
-   when the content is taller than the window. */
 .page.home {
   display: flex;
   flex-direction: column;
   padding: 40px 32px;
-}
-
-.home > :first-child {
-  margin-top: auto;
-}
-
-.home > :last-child {
-  margin-bottom: auto;
 }
 
 .home > section,
@@ -1334,8 +1324,9 @@ a.project-chip:hover {
   margin: 0 auto;
 }
 
+/* The mark sits a third of the way down, fixed, so the feed loading in below never moves it. */
 .hero {
-  padding: 72px 0 36px;
+  padding: max(32px, calc(33vh - 40px)) 0 36px;
   text-align: center;
 }
 
@@ -1344,6 +1335,17 @@ a.project-chip:hover {
   color: var(--text);
   margin: 0 auto -20px;
   transform: scaleY(-1);
+}
+
+/* Two equal halves either side of the i keep it on the centre line whatever the font. */
+.page.home .hero h1,
+.hero-cutout {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+}
+
+.hero-left {
+  text-align: right;
 }
 
 .page.home .hero h1 {
@@ -1356,15 +1358,60 @@ a.project-chip:hover {
   font-weight: 750;
 }
 
-/* Give every letter the same clearance while preserving the word's full weight. */
+/* Give every letter the same clearance while preserving the word's full weight. Rings of
+   shadows rather than a text stroke, whose square corners would cut square notches. */
 .hero-cutout {
   position: absolute;
   inset: 0;
   z-index: -1;
   color: var(--bg);
-  -webkit-text-stroke: 20px var(--bg);
   pointer-events: none;
   user-select: none;
+}
+
+/* Every part is drafted as a hairline outline in the accent color, at one pen speed so long
+   rings take longer than short walls, from loosely staggered starts. Then the ink floods out
+   from the lodge, storey by storey. */
+.hero-mark[data-animate] path {
+  animation:
+    mark-draft calc(0.15s + var(--len) * 6ms) cubic-bezier(0.37, 0, 0.63, 1) calc(var(--jitter) * 0.12s) both,
+    mark-ink 0.2s cubic-bezier(0.65, 0, 0.35, 1) calc(0.85s + var(--storey) * 0.07s) both;
+}
+
+@keyframes mark-draft {
+  from {
+    fill: transparent;
+    stroke: var(--accent);
+    stroke-width: 0.2px;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  to {
+    fill: transparent;
+    stroke: var(--accent);
+    stroke-width: 0.2px;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes mark-ink {
+  from {
+    fill: transparent;
+    stroke: var(--accent);
+    stroke-width: 0.2px;
+  }
+  to {
+    fill: currentColor;
+    stroke: transparent;
+    stroke-width: 0.2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-mark[data-animate] path {
+    animation: none;
+  }
 }
 
 .lede {
@@ -1891,8 +1938,9 @@ a.project-chip:hover {
     padding: 24px 16px;
   }
 
+  /* Less the page padding and the 45px top bar, so it's still a third of the screen. */
   .hero {
-    padding-top: 32px;
+    padding-top: max(32px, calc(33vh - 24px - 45px));
   }
 
   .share-dialog,
