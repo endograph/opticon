@@ -34,10 +34,20 @@ function safeRedirect(raw: string | null): string {
   }
 }
 
+/**
+ * The secret the web app made for this sign-in. It comes back with the session, and the web app
+ * only accepts a session carrying its own, so a link can't sign a browser into someone else's
+ * account (login CSRF).
+ */
+function loginNonce(req: Request): string | null {
+  const nonce = new URL(req.url).searchParams.get("nonce");
+  return nonce && /^[\w-]{16,128}$/.test(nonce) ? nonce : null;
+}
+
 /** Sends the browser back with a web session token in the fragment, which never reaches servers. */
-function withSession(redirect: string, token: string): Response {
+function withSession(redirect: string, token: string, nonce: string): Response {
   const url = new URL(redirect);
-  url.hash = `session=${token}`;
+  url.hash = `session=${token}&nonce=${nonce}`;
   return Response.redirect(url.toString(), 302);
 }
 
@@ -47,8 +57,10 @@ http.route({
   handler: httpAction(async (ctx, req) => {
     const clientId = process.env.GITHUB_CLIENT_ID;
     if (!clientId) return new Response("GitHub OAuth is not configured", { status: 503 });
+    const nonce = loginNonce(req);
+    if (!nonce) return new Response("Start signing in from Opticon.", { status: 400 });
     const state = randomToken(16);
-    await ctx.runMutation(internal.auth.saveOauthState, { state, redirect: safeRedirect(new URL(req.url).searchParams.get("redirect")) });
+    await ctx.runMutation(internal.auth.saveOauthState, { state, nonce, redirect: safeRedirect(new URL(req.url).searchParams.get("redirect")) });
     const authorize = new URL(`${githubUrl()}/login/oauth/authorize`);
     authorize.searchParams.set("client_id", clientId);
     authorize.searchParams.set("redirect_uri", `${process.env.CONVEX_SITE_URL}/auth/github/callback`);
@@ -65,9 +77,9 @@ http.route({
   method: "GET",
   handler: httpAction(async (ctx, req) => {
     const params = new URL(req.url).searchParams;
-    const redirect = await ctx.runMutation(internal.auth.consumeOauthState, { state: params.get("state") ?? "" });
+    const login = await ctx.runMutation(internal.auth.consumeOauthState, { state: params.get("state") ?? "" });
     const code = params.get("code");
-    if (!redirect || !code) return new Response("Login expired, please try again.", { status: 400 });
+    if (!login || !code) return new Response("Login expired, please try again.", { status: 400 });
 
     const exchange = await fetch(`${githubUrl()}/login/oauth/access_token`, {
       method: "POST",
@@ -109,7 +121,7 @@ http.route({
       githubRefreshTokenExpiresAt: refreshExpiresIn ? Date.now() + refreshExpiresIn * 1000 : undefined,
       memberOf,
     });
-    return withSession(redirect, await issueToken(ctx, userId, "web"));
+    return withSession(login.redirect, await issueToken(ctx, userId, "web"), login.nonce);
   }),
 });
 
@@ -119,13 +131,15 @@ http.route({
   handler: httpAction(async (ctx, req) => {
     if (process.env.OPTICON_DEV_AUTH !== "1") return new Response("Not found", { status: 404 });
     const params = new URL(req.url).searchParams;
+    const nonce = loginNonce(req);
+    if (!nonce) return new Response("Start signing in from Opticon.", { status: 400 });
     const login = (params.get("login") ?? "dev").toLowerCase();
     // Fake, negative GitHub ids can never collide with real accounts.
     const githubId = -Number.parseInt((await sha256(login)).slice(0, 12), 16);
     // Dev users count as members of the first allowed org, if the instance is limited to some.
     const memberOf = instancePolicy().allowedOrgs[0];
     const userId = await ctx.runMutation(internal.auth.upsertUser, { githubId, login, name: `${login} (dev)`, memberOf });
-    return withSession(safeRedirect(params.get("redirect")), await issueToken(ctx, userId, "web"));
+    return withSession(safeRedirect(params.get("redirect")), await issueToken(ctx, userId, "web"), nonce);
   }),
 });
 

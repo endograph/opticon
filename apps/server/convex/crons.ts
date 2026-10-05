@@ -5,5 +5,6 @@ const crons = cronJobs();
 
 crons.interval("recheck repo access", { hours: 1 }, internal.repos.recheck, {});
 crons.interval("recheck org membership", { minutes: 15 }, internal.access.recheckMembers, {});
+crons.interval("sweep expired sign-ins", { hours: 1 }, internal.auth.sweepExpired, {});
 
 export default crons;

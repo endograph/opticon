@@ -80,8 +80,12 @@ export default defineSchema({
   oauthStates: defineTable({
     state: v.string(),
     redirect: v.string(),
+    /** The signing-in browser's secret, returned with the session so it accepts only its own login. Rows from before it never complete. */
+    nonce: v.optional(v.string()),
     expiresAt: v.number(),
-  }).index("by_state", ["state"]),
+  })
+    .index("by_state", ["state"])
+    .index("by_expires", ["expiresAt"]),
 
   /** Pending `opticon login` requests, approved from the web. */
   cliLogins: defineTable({
@@ -92,7 +96,8 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
   })
     .index("by_user_code", ["userCode"])
-    .index("by_poll_hash", ["pollHash"]),
+    .index("by_poll_hash", ["pollHash"])
+    .index("by_expires", ["expiresAt"]),
 
   shares: defineTable({
     /** Unguessable link id; for `link` shares, possession of the link is the credential. */
@@ -109,12 +114,15 @@ export default defineSchema({
      */
     repo: v.optional(v.string()),
     access: accessValidator,
+    /**
+     * Activity as of the share's last flush from its head (see shareHeads), at most once per
+     * ACTIVITY_MS. Lists read these; the head has the live values.
+     */
     eventCount: v.number(),
-    /** Position counter: an event's seq is fixed when it first appears. */
-    nextSeq: v.number(),
-    /** Change counter: bumped on every insert or update, so viewers can follow changes. */
-    rev: v.number(),
     updatedAt: v.number(),
+    /** Legacy: moved to shareHeads. Read once to seed a share's head, then removed. */
+    nextSeq: v.optional(v.number()),
+    rev: v.optional(v.number()),
     /** Created by an autosync rule rather than by hand. */
     auto: v.optional(v.boolean()),
     /** Shown on the owner's profile, repo pages, and the feed, to viewers who can open it. */
@@ -127,6 +135,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_owner", ["ownerId"])
+    /** Live shares (no deletedAt) by recent activity. */
+    .index("by_owner_active", ["ownerId", "deletedAt", "updatedAt"])
     .index("by_owner_session", ["ownerId", "provider", "sessionId"])
     .index("by_listed", ["listed", "updatedAt"])
     .index("by_owner_listed", ["ownerId", "listed", "updatedAt"])
@@ -158,6 +168,24 @@ export default defineSchema({
     checkedAt: v.number(),
   }).index("by_user_repo", ["userId", "repo"]),
 
+  /**
+   * A share's upload state, written on every upload. Kept off `shares` so the lists that read
+   * shares don't re-run on each one; only the share page and the uploader read it.
+   */
+  shareHeads: defineTable({
+    shareId: v.id("shares"),
+    /** Position counter: an event's seq is fixed when it first appears. */
+    nextSeq: v.number(),
+    /** Change counter: bumped on every insert or update, so viewers can follow changes. */
+    rev: v.number(),
+    eventCount: v.number(),
+    updatedAt: v.number(),
+    /** When uploads last reached the share; the next may not until ACTIVITY_MS later. */
+    flushedAt: v.optional(v.number()),
+    /** A flush to the share is scheduled. */
+    flushPending: v.optional(v.boolean()),
+  }).index("by_share", ["shareId"]),
+
   shareEvents: defineTable({
     shareId: v.id("shares"),
     eventId: v.string(),
@@ -168,7 +196,10 @@ export default defineSchema({
     .index("by_share_event", ["shareId", "eventId"])
     .index("by_share_rev", ["shareId", "rev"]),
 
-  /** One row per connected viewer, removed when its heartbeat lapses. */
+  /**
+   * One row per connected viewer, removed when its heartbeat lapses. Heartbeats only touch their
+   * own row, and no query reads these, so a heartbeat re-runs nothing; counts live in `watched`.
+   */
   presence: defineTable({
     shareId: v.id("shares"),
     viewerId: v.string(),
@@ -176,6 +207,15 @@ export default defineSchema({
   })
     .index("by_share", ["shareId"])
     .index("by_share_viewer", ["shareId", "viewerId"]),
+
+  /** Shares with connected viewers, and how many. Changes only when a viewer arrives or leaves. */
+  watched: defineTable({
+    shareId: v.id("shares"),
+    ownerId: v.id("users"),
+    viewers: v.number(),
+  })
+    .index("by_share", ["shareId"])
+    .index("by_owner", ["ownerId"]),
 
   /** Shares a user has viewed, excluding their own. Unfollowing keeps the row so later views don't re-follow. */
   follows: defineTable({

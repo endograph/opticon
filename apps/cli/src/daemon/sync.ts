@@ -39,7 +39,7 @@ export interface AccountState {
  * Bridges local sessions and one server's sharing backend; the daemon runs one per known server
  * (see Syncs), so every server keeps syncing whichever one is selected. Shares are uploaded in full when created.
  * After that, a session is streamed only while the server reports live demand (a connected
- * viewer, with live sync on). Uploads are diffed against what this daemon already sent.
+ * viewer, with live sync on, or always for autosynced sessions). Uploads are diffed against what this daemon already sent.
  *
  * Autosync rules additionally create and refresh shares, on a slow cadence, for every session
  * in a matching project that's active after the rule was added. Sessions whose share the owner
@@ -55,7 +55,10 @@ export class ShareSync {
   private queues = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
   private offList?: () => void;
-  /** Sessions whose share was deleted, from the server. */
+  /**
+   * Sessions whose share was deleted: here, or found when the server rejects autosync for one.
+   * The server remembers all of them; this saves asking again.
+   */
   private deleted = new Set<SessionKey>();
   private autoTimers = new Map<SessionKey, Timer>();
   private autoQueue: Promise<void> = Promise.resolve();
@@ -65,6 +68,11 @@ export class ShareSync {
   private claimQueue: Promise<void> = Promise.resolve();
   /** The host of this server's GitHub, as it appears in remotes. */
   private githubHost = "github.com";
+  /** Bumped by every connect and disconnect, so a connect still waiting can tell it's stale. */
+  private generation = 0;
+  /** Shares the server says have viewers right now. */
+  private demand: Demand = [];
+  private reconciles = 0;
   rules: AutosyncRule[] = [];
   shares: MyShare[] = [];
   account: AccountState;
@@ -77,9 +85,9 @@ export class ShareSync {
   }
 
   async start(): Promise<void> {
+    this.offList = this.store.onList((change) => this.onSessions(change));
     this.rules = await this.readRules();
     await this.connect();
-    this.offList = this.store.onList((change) => this.onSessions(change));
   }
 
   stop(): void {
@@ -130,6 +138,9 @@ export class ShareSync {
       access,
       auto,
       listed,
+    }).catch((error: Error) => {
+      if ((error as { data?: { code?: string } }).data?.code === "deleted") this.deleted.add(key);
+      throw error;
     });
     if (!auto) this.deleted.delete(key);
     await this.upload(shareId, projection);
@@ -205,7 +216,11 @@ export class ShareSync {
 
   private async connect(): Promise<void> {
     this.disconnect();
-    this.auth = await readAuth(this.instance.convexUrl);
+    const generation = ++this.generation;
+    const auth = await readAuth(this.instance.convexUrl);
+    // Stopped or reconnected while reading.
+    if (generation !== this.generation) return;
+    this.auth = auth;
     this.account = this.signedOut();
     if (!this.auth) return this.emit();
     const { token } = this.auth;
@@ -224,9 +239,11 @@ export class ShareSync {
         api.auth.me,
         { token },
         (me) => {
+          const liveSyncChanged = !!me && me.liveSync !== this.account.liveSync;
           this.account = me
             ? { ...this.account, signedIn: true, login: me.login, liveSync: me.liveSync, error: undefined }
             : { ...this.account, signedIn: false, error: "Your login expired. Run `opticon login`." };
+          if (liveSyncChanged) void this.reconcile();
           this.emit();
         },
         onError,
@@ -244,21 +261,15 @@ export class ShareSync {
         },
         onError,
       ),
-      client.onUpdate(
-        api.shares.deleted,
-        { token },
-        (deleted) => {
-          this.deleted = new Set(deleted.map((d) => keyOf({ provider: d.provider, id: d.sessionId })));
-        },
-        onError,
-      ),
-      client.onUpdate(api.shares.liveDemand, { token }, (demand) => this.reconcile(demand), onError),
+      client.onUpdate(api.shares.liveDemand, { token }, (demand) => void this.reconcile(demand), onError),
     );
   }
 
   private disconnect(): void {
+    this.generation++;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers = [];
+    this.demand = [];
     for (const shareId of [...this.live.keys()]) this.stopLive(shareId);
     void this.client?.close();
     this.client = undefined;
@@ -276,6 +287,8 @@ export class ShareSync {
 
   async reloadRules(): Promise<void> {
     this.rules = await this.readRules();
+    // Autosync forces live sync on, so rules decide what streams when it's off.
+    void this.reconcile();
     this.emit();
   }
 
@@ -343,9 +356,20 @@ export class ShareSync {
 
   // --- live sync ------------------------------------------------------------
 
-  /** Starts streaming newly demanded shares and stops the rest. */
-  private reconcile(demand: Demand): void {
-    const wanted = new Map(demand.map((d) => [d.shareId as string, keyOf({ provider: d.provider, id: d.sessionId })]));
+  /**
+   * Starts streaming newly demanded shares and stops the rest. With live sync off, only
+   * autosynced sessions stream: autosync keeps them updated anyway, so they're always live.
+   */
+  private async reconcile(demand = this.demand): Promise<void> {
+    this.demand = demand;
+    const run = ++this.reconciles;
+    const wanted = new Map<string, SessionKey>();
+    for (const d of demand) {
+      const key = keyOf({ provider: d.provider, id: d.sessionId });
+      if (this.account.liveSync || (await this.autosynced(key))) wanted.set(d.shareId, key);
+    }
+    // A newer demand or setting arrived while rules were being matched.
+    if (run !== this.reconciles) return;
     for (const shareId of [...this.live.keys()]) if (!wanted.has(shareId)) this.stopLive(shareId);
     for (const [shareId, key] of wanted) {
       if (this.live.has(shareId)) continue;
@@ -365,6 +389,11 @@ export class ShareSync {
           else unsubscribe = fn;
         });
     }
+  }
+
+  private async autosynced(key: SessionKey): Promise<boolean> {
+    const cwd = this.store.get(key)?.cwd;
+    return !!cwd && !!(await this.ruleFor(cwd));
   }
 
   private stopLive(shareId: string): void {

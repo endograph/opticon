@@ -8,6 +8,8 @@ import { ACCESS_REFRESH_MS } from "./lib";
 
 const MAX_REPO_REFRESH = 20;
 const MEMBER_RECHECK_MS = 60 * 60_000;
+/** A membership check GitHub couldn't answer is retried after this, not immediately. */
+const MEMBER_RETRY_MS = 15 * 60_000;
 const MEMBER_BATCH = 100;
 
 /**
@@ -104,13 +106,14 @@ export const recheckMembers = internalAction({
     if (!allowedOrgs.length) return;
     const due = await ctx.runQuery(internal.access.membersDue, { before: Date.now() - MEMBER_RECHECK_MS, limit: MEMBER_BATCH });
     for (const userId of due) {
-      const credentials = await ctx.runQuery(internal.auth.githubTokenForUser, { userId });
-      const headers = credentials && (await githubHeaders(ctx, credentials));
       try {
+        const credentials = await ctx.runQuery(internal.auth.githubTokenForUser, { userId });
+        const headers = credentials && (await githubHeaders(ctx, credentials));
         const org = headers ? await allowedOrgMembership(headers, allowedOrgs) : null;
         await ctx.runMutation(internal.access.settleMember, { userId, org });
       } catch (error) {
         console.warn(`Couldn't re-check membership for ${userId}: ${(error as Error).message}`);
+        await ctx.runMutation(internal.access.deferMember, { userId });
       }
     }
     if (due.length === MEMBER_BATCH) await ctx.scheduler.runAfter(0, internal.access.recheckMembers, {});
@@ -125,6 +128,14 @@ export const membersDue = internalQuery({
       .withIndex("by_member_checked", (q) => q.lt("memberCheckedAt", before))
       .take(limit);
     return users.map((u) => u._id);
+  },
+});
+
+/** Retries an unanswered check after MEMBER_RETRY_MS. Verification, and so expiry, is unchanged. */
+export const deferMember = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    await ctx.db.patch(userId, { memberCheckedAt: Date.now() - MEMBER_RECHECK_MS + MEMBER_RETRY_MS });
   },
 });
 
@@ -154,7 +165,11 @@ export interface GithubCredentials {
   refreshExpiresAt?: number;
 }
 
-/** API headers using the user's own GitHub token, refreshed if it's about to expire. Null without a usable token. */
+/**
+ * API headers using the user's own GitHub token, refreshed if it's about to expire. Null when
+ * there's no usable token and GitHub has said so; throws when it couldn't say (an outage, or
+ * another refresh in flight), so callers never treat that as lost access.
+ */
 export async function githubHeaders(ctx: ActionCtx, credentials: GithubCredentials): Promise<Record<string, string> | null> {
   let githubToken = credentials.githubToken;
   if (!githubToken) return null;
@@ -169,7 +184,9 @@ export async function githubHeaders(ctx: ActionCtx, credentials: GithubCredentia
 async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Promise<string | null> {
   const refreshToken = viewer.refreshToken;
   if (!refreshToken || (viewer.refreshExpiresAt !== undefined && viewer.refreshExpiresAt <= Date.now())) return null;
-  if (!await ctx.runMutation(internal.auth.claimGithubRefresh, { userId: viewer.userId, refreshToken })) return null;
+  if (!await ctx.runMutation(internal.auth.claimGithubRefresh, { userId: viewer.userId, refreshToken })) {
+    throw new Error("GitHub token refresh already in progress");
+  }
   try {
     const response = await fetch(`${githubUrl()}/login/oauth/access_token`, {
       method: "POST",
@@ -180,7 +197,8 @@ async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Pr
       }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return null;
+    if (!response.ok) throw new Error(`GitHub token refresh failed (${response.status})`);
+    // GitHub rejects a revoked or expired refresh token with a 200 and an `error`.
     const result = await response.json() as {
       access_token?: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number;
     };
@@ -192,7 +210,8 @@ async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Pr
         refreshToken: result.refresh_token, refreshExpiresAt: Date.now() + result.refresh_token_expires_in * 1000,
       },
     });
-    return saved ? result.access_token : null;
+    if (!saved) throw new Error("GitHub token refresh superseded by a new sign-in");
+    return result.access_token;
   } finally {
     await ctx.runMutation(internal.auth.finishGithubRefresh, { userId: viewer.userId, previousRefreshToken: refreshToken });
   }

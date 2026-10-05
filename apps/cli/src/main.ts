@@ -153,7 +153,8 @@ async function web() {
 
 /**
  * Live sync streams new messages to a shared session while someone is viewing it. It's an
- * account setting on the server, so it applies to every machine you're signed in on.
+ * account setting on the server, so it applies to every machine you're signed in on. Autosynced
+ * projects are always live, whatever it's set to.
  */
 async function liveSync(value: string | undefined) {
   const auth = await readAuth();
@@ -179,6 +180,10 @@ async function liveSync(value: string | undefined) {
       ? "Live sync is on: shared sessions update while someone is watching."
       : "Live sync is off: viewers see each share as it was when you last shared or resynced it.",
   );
+  const autosynced = (await currentRules()).filter((r) => r.sync);
+  if (!me.liveSync && autosynced.length) {
+    console.log(`Autosynced projects stay live on this machine: ${autosynced.map(describeRule).join(", ")}.`);
+  }
 }
 
 /**

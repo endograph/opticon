@@ -226,6 +226,8 @@ export function ShareDialog(props: { sessionKey: string; share?: MyShare; accoun
             <span className="hint">
               {account.liveSync ? (
                 "Live sync is on: viewers see new messages as they happen."
+              ) : autosync?.rule ? (
+                "Autosync is on for this project, so it's live even with live sync off: viewers see new messages as they happen."
               ) : (
                 <>
                   Live sync is off: viewers see this snapshot. Turn it on with <code>opticon live-sync on</code>.

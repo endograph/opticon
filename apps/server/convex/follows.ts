@@ -2,19 +2,26 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
 import { canView, requireUser, viewChecker } from "./lib";
-import { shareBySlug, viewerCount } from "./shares";
+import { headFor, shareBySlug } from "./shares";
 
 const LIST_LIMIT = 200;
+/** Heartbeats re-record a view at most this often; leaving always records it. */
+const VIEW_RECORD_MS = 5 * 60_000;
 
 /**
  * Records that a signed-in viewer has someone else's share open, and how much of it they've seen.
- * Called from presence heartbeats. The first view follows the share; later views never re-follow,
- * so an unfollowed share stays unfollowed until followed again. Callers check access.
+ * Called from presence heartbeats, at most every VIEW_RECORD_MS so their Following list isn't
+ * rewritten every few seconds, and on leaving (`final`). The first view follows the share; later
+ * views never re-follow, so an unfollowed share stays unfollowed until followed again. Callers
+ * check access.
  */
-export async function recordView(ctx: MutationCtx, user: Doc<"users">, share: Doc<"shares">): Promise<void> {
+export async function recordView(ctx: MutationCtx, user: Doc<"users">, share: Doc<"shares">, { final = false } = {}): Promise<void> {
   if (share.ownerId === user._id) return;
   const existing = await followRow(ctx, user._id, share._id);
-  const seen = { lastViewedAt: Date.now(), seenEventCount: share.eventCount };
+  const now = Date.now();
+  if (existing && !final && now - existing.lastViewedAt < VIEW_RECORD_MS) return;
+  // The live count: the share's own may trail it by up to ACTIVITY_MS, and unread never goes below 0.
+  const seen = { lastViewedAt: now, seenEventCount: (await headFor(ctx, share)).eventCount };
   if (existing) await ctx.db.patch(existing._id, seen);
   else await ctx.db.insert("follows", { userId: user._id, shareId: share._id, following: true, ...seen });
 }
@@ -25,9 +32,10 @@ export const setFollowing = mutation({
     const user = await requireUser(ctx, token);
     const share = await shareBySlug(ctx, slug);
     if (!share) throw new ConvexError({ code: "not_found" });
-    if (!(await canView(ctx, share, user)).ok) throw new ConvexError({ code: "forbidden" });
     if (share.ownerId === user._id) return;
     const existing = await followRow(ctx, user._id, share._id);
+    // Unfollowing needs no access, so shares listed as unavailable can still be removed.
+    if (following && !(await canView(ctx, share, user)).ok) throw new ConvexError({ code: "forbidden" });
     if (existing) await ctx.db.patch(existing._id, { following });
     else await ctx.db.insert("follows", { userId: user._id, shareId: share._id, following, lastViewedAt: Date.now() });
   },
@@ -115,7 +123,6 @@ async function shareSummary(ctx: QueryCtx, share: Doc<"shares"> | null, checker:
     provider: share.provider,
     updatedAt: share.updatedAt,
     eventCount: share.eventCount,
-    viewers: await viewerCount(ctx, share._id),
     owner: owner && { login: owner.login, avatarUrl: owner.avatarUrl },
   };
 }

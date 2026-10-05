@@ -120,3 +120,65 @@ test("rules match by normalized git remote, or by directory prefix", () => {
   expect(matches({ instance: "x", path: "/work/proj", sync: true, since }, "/work/project", undefined)).toBe(false);
   expect(matches({ instance: "x", path: "/work/proj", sync: false, since }, "/work/proj/x", undefined)).toBe(false);
 });
+
+test("with live sync off, only autosynced sessions stream to viewers", async () => {
+  const cwds: Record<string, string> = { "claude/auto": "/work/proj", "claude/manual": "/elsewhere" };
+  const subscribed: string[] = [];
+  const store = {
+    get: (key: string) => ({ cwd: cwds[key] }),
+    subscribe: async (key: string) => {
+      subscribed.push(key);
+      return () => subscribed.splice(subscribed.indexOf(key), 1);
+    },
+  } as unknown as SessionStore;
+  const sync = new ShareSync(store, INSTANCE);
+  const internals = sync as unknown as {
+    reconcile(demand?: { shareId: string; provider: "claude"; sessionId: string }[]): Promise<void>;
+    reloadRules(): Promise<void>;
+    readRules(): Promise<unknown[]>;
+  };
+  sync.account = { ...sync.account, signedIn: true, liveSync: false };
+  sync.rules = [{ instance: "x", path: "/work/proj", sync: true, since: "2026-01-01T00:00:00.000Z" }];
+  const demand = [
+    { shareId: "a", provider: "claude" as const, sessionId: "auto" },
+    { shareId: "m", provider: "claude" as const, sessionId: "manual" },
+  ];
+
+  await internals.reconcile(demand);
+  await Bun.sleep(0);
+  expect(subscribed).toEqual(["claude/auto"]);
+
+  // Turning live sync on streams the rest without waiting for new demand.
+  sync.account = { ...sync.account, liveSync: true };
+  await internals.reconcile();
+  await Bun.sleep(0);
+  expect(subscribed.sort()).toEqual(["claude/auto", "claude/manual"]);
+
+  // Removing the rule with live sync off stops the autosynced session too.
+  sync.account = { ...sync.account, liveSync: false };
+  internals.readRules = async () => [];
+  await internals.reloadRules();
+  await Bun.sleep(0);
+  expect(subscribed).toEqual([]);
+});
+
+test("a share the server says was deleted isn't offered to autosync again", async () => {
+  const meta: SessionMeta = { provider: "claude", id: "gone", path: "/p.jsonl", cwd: "/work/proj", updatedAt: "2026-02-01T00:00:00.000Z" };
+  const store = { get: () => meta, events: async () => ({ meta, events: [] }) } as unknown as SessionStore;
+  let creates = 0;
+  const sync = new ShareSync(store, INSTANCE);
+  const internals = sync as unknown as { client: unknown; auth: unknown; autosync(key: string): Promise<void> };
+  internals.client = {
+    action: async () => {
+      creates += 1;
+      throw Object.assign(new Error("deleted"), { data: { code: "deleted" } });
+    },
+  };
+  internals.auth = { token: "t" };
+  sync.account = { ...sync.account, signedIn: true };
+  sync.rules = [{ instance: "x", path: "/work/proj", sync: true, since: "2026-01-01T00:00:00.000Z" }];
+
+  await expect(internals.autosync("claude/gone")).rejects.toThrow(/deleted/);
+  await internals.autosync("claude/gone");
+  expect(creates).toBe(1);
+});

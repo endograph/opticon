@@ -295,10 +295,10 @@ function PublicShareList({ shares, showOwner = false, hideProject = false }: { s
                   </Link>
                 )}
                 {!hideProject && <ProjectLink project={share.project} repo={share.repo} login={share.owner?.login} />}
-                {(isLive(updated, now) || share.viewers > 0) && (
+                {isLive(updated, now) && (
                   <span className="presence">
-                    {isLive(updated, now) && <span className="live-dot" />}
-                    {share.viewers} watching
+                    <span className="live-dot" />
+                    live
                   </span>
                 )}
                 <span>updated {relativeTime(updated, now)}</span>

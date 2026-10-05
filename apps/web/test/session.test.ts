@@ -4,24 +4,50 @@ import { type SessionUser, cacheUser, captureSessionFromHash, getSession, getSes
 const backend = "https://example.convex.cloud";
 const user: SessionUser = { login: "alice", name: "Alice", avatarUrl: "https://example.com/alice.png", liveSync: true };
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalSessionStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
 let storage: Map<string, string>;
+let tabStorage: Map<string, string>;
+
+const fakeStorage = (map: () => Map<string, string>) => ({
+  getItem: (key: string) => map().get(key) ?? null,
+  setItem: (key: string, value: string) => map().set(key, value),
+  removeItem: (key: string) => map().delete(key),
+});
 
 beforeEach(() => {
   storage = new Map();
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key),
-    },
-  });
+  tabStorage = new Map();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: fakeStorage(() => storage) });
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: fakeStorage(() => tabStorage) });
 });
 
 afterEach(() => {
   if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
   else Reflect.deleteProperty(globalThis, "localStorage");
+  if (originalSessionStorage) Object.defineProperty(globalThis, "sessionStorage", originalSessionStorage);
+  else Reflect.deleteProperty(globalThis, "sessionStorage");
 });
+
+/** Runs `run` on a page at `hash`, returning the URL the hash was stripped to. */
+function onRedirect(hash: string, run: () => void): string | undefined {
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const originalHistory = Object.getOwnPropertyDescriptor(globalThis, "history");
+  let replaced: string | undefined;
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { hash, pathname: "/cli", search: "?code=abc" } });
+  Object.defineProperty(globalThis, "history", {
+    configurable: true,
+    value: { replaceState: (_state: unknown, _unused: string, url: string) => { replaced = url; } },
+  });
+  try {
+    run();
+    return replaced;
+  } finally {
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    else Reflect.deleteProperty(globalThis, "location");
+    if (originalHistory) Object.defineProperty(globalThis, "history", originalHistory);
+    else Reflect.deleteProperty(globalThis, "history");
+  }
+}
 
 describe("session display", () => {
   test("an unchecked token has unknown auth, while no token is signed out", () => {
@@ -67,28 +93,25 @@ describe("session display", () => {
   test("a login redirect drops the previous account cache and removes the token from the URL", () => {
     storage.set("opticon_session", "previous-session");
     cacheUser("previous-session", backend, user);
-    const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
-    const originalHistory = Object.getOwnPropertyDescriptor(globalThis, "history");
-    let replaced: string | undefined;
-    Object.defineProperty(globalThis, "location", {
-      configurable: true,
-      value: { hash: "#session=new-session", pathname: "/cli", search: "?code=abc" },
-    });
-    Object.defineProperty(globalThis, "history", {
-      configurable: true,
-      value: { replaceState: (_state: unknown, _unused: string, url: string) => { replaced = url; } },
-    });
-    try {
-      captureSessionFromHash();
-      expect(getSession()).toBe("new-session");
-      expect(storage.has("opticon_auth")).toBe(false);
-      expect(getSessionUser(getSession(), backend, undefined)).toBeUndefined();
-      expect(replaced).toBe("/cli?code=abc");
-    } finally {
-      if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
-      else Reflect.deleteProperty(globalThis, "location");
-      if (originalHistory) Object.defineProperty(globalThis, "history", originalHistory);
-      else Reflect.deleteProperty(globalThis, "history");
+    tabStorage.set("opticon_login_nonce", "tab-nonce");
+    const replaced = onRedirect("#session=new-session&nonce=tab-nonce", captureSessionFromHash);
+    expect(getSession()).toBe("new-session");
+    expect(storage.has("opticon_auth")).toBe(false);
+    expect(tabStorage.has("opticon_login_nonce")).toBe(false);
+    expect(getSessionUser(getSession(), backend, undefined)).toBeUndefined();
+    expect(replaced).toBe("/cli?code=abc");
+  });
+
+  test("a session this tab didn't ask for is dropped, keeping the current account", () => {
+    storage.set("opticon_session", "mine");
+    cacheUser("mine", backend, user);
+    for (const hash of ["#session=attacker", "#session=attacker&nonce=guess"]) {
+      if (hash.includes("guess")) tabStorage.set("opticon_login_nonce", "tab-nonce");
+      expect(onRedirect(hash, captureSessionFromHash)).toBe("/cli?code=abc");
+      expect(getSession()).toBe("mine");
+      expect(getSessionUser("mine", backend, undefined)).toEqual(user);
     }
+    // A failed attempt uses up the nonce, so it can't be replayed.
+    expect(tabStorage.has("opticon_login_nonce")).toBe(false);
   });
 });

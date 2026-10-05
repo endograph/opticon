@@ -68,7 +68,11 @@ try {
     const page = await (await browser.newContext()).newPage();
     page.on("pageerror", (e) => console.error(`[${login ?? "anonymous"}] ${e.message}`));
     if (login) {
-      await page.goto(`http://127.0.0.1:3311/auth/dev?login=${login}&redirect=${encodeURIComponent("http://127.0.0.1:4747/")}`);
+      // Sign-in must start in the tab, which keeps a nonce the redirect has to return.
+      await page.goto("http://127.0.0.1:4747/");
+      const nonce = "e2e-login-nonce-0000";
+      await page.evaluate((n) => sessionStorage.setItem("opticon_login_nonce", n), nonce);
+      await page.goto(`http://127.0.0.1:3311/auth/dev?login=${login}&nonce=${nonce}&redirect=${encodeURIComponent("http://127.0.0.1:4747/")}`);
       await page.waitForSelector(`text=${login}`);
     }
     return page;
@@ -211,7 +215,8 @@ try {
     await friend.click(".nav-item:has-text('Following')");
     await friend.waitForSelector(".share-row:has-text('first message')");
     await line({ type: "assistant", uuid: `unread-${RUN}`, message: { content: [{ type: "text", text: `unread ${RUN}` }] } });
-    await friend.waitForSelector(".share-row .unread-mark:has-text('1 new')", { timeout: 15_000 });
+    // Lists see uploads at most once a minute (shares.ACTIVITY_MS).
+    await friend.waitForSelector(".share-row .unread-mark:has-text('1 new')", { timeout: 75_000 });
     await friend.goto("http://127.0.0.1:4747/shares");
     await friend.waitForSelector(".sidebar .session-item .unread-mark:has-text('1 new')");
     await friend.screenshot({ path: join(tmpdir(), "opticon-e2e-following.png") });

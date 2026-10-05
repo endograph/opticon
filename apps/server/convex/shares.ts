@@ -2,7 +2,7 @@ import { MAX_SHARED_TEXT, PRIVATE_ACCESS, normalizeAccess } from "@opticon/core/
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
+import { type MutationCtx, type QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
 import { followRow } from "./follows";
 import { instancePolicy, requireAllowedAccess } from "./instance";
 import { randomToken, requireProtocol, requireUser, userForToken, viewChecker } from "./lib";
@@ -21,6 +21,13 @@ const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** Recent listed shares scanned to rank active repos. */
 const ACTIVE_SCAN = 2000;
 const BADGE_SCAN = 1000;
+/** The owner's most recently active shares, for the daemon and the owner's share list. */
+const MINE_LIMIT = 500;
+/**
+ * Uploads reach the share document, which every list reads, at most this often; between, only
+ * its head changes. Shorter than the lists' 2-minute "live" window, so active shares stay live.
+ */
+export const ACTIVITY_MS = 60_000;
 
 const provider = v.union(v.literal("claude"), v.literal("codex"));
 
@@ -131,8 +138,6 @@ export const upsert = internalMutation({
       project: args.project,
       access,
       eventCount: 0,
-      nextSeq: 0,
-      rev: 0,
       updatedAt: Date.now(),
       auto: args.auto,
       listed: !!args.listed,
@@ -141,7 +146,10 @@ export const upsert = internalMutation({
   },
 });
 
-/** Inserts or replaces events by id. Unchanged events are skipped, so re-sending a snapshot is cheap. */
+/**
+ * Inserts or replaces events by id. Unchanged events are skipped, so re-sending a snapshot is cheap.
+ * Writes the share's head, and reaches the share itself at most once per ACTIVITY_MS.
+ */
 export const append = mutation({
   args: {
     token: v.string(),
@@ -154,7 +162,8 @@ export const append = mutation({
     requireProtocol(args.protocol);
     const share = await ownShare(ctx, args.token, args.shareId);
     if (args.events.length > MAX_BATCH) throw new ConvexError({ code: "batch_too_large", max: MAX_BATCH });
-    let { nextSeq, rev, eventCount } = share;
+    const head = await headFor(ctx, share);
+    let { nextSeq, rev, eventCount } = head;
     let changed = 0;
     for (const event of args.events) {
       if (event.kind !== "tool" && event.text.length > MAX_SHARED_TEXT) throw new ConvexError({ code: "event_too_large" });
@@ -172,10 +181,8 @@ export const append = mutation({
         eventCount += 1;
       }
     }
-    const titleChanged = args.title !== undefined && args.title !== share.title;
-    if (changed || titleChanged) {
-      await ctx.db.patch(share._id, { nextSeq, rev, eventCount, updatedAt: Date.now(), ...(titleChanged ? { title: args.title } : {}) });
-    }
+    if (args.title !== undefined && args.title !== share.title) await ctx.db.patch(share._id, { title: args.title });
+    if (changed) await saveHead(ctx, share, head, { nextSeq, rev, eventCount, updatedAt: Date.now() });
     return { changed };
   },
 });
@@ -224,25 +231,40 @@ export const purge = internalMutation({
     const viewers = await ctx.db
       .query("presence")
       .withIndex("by_share", (q) => q.eq("shareId", shareId))
-      .collect();
+      .take(DELETE_BATCH);
     for (const p of viewers) await ctx.db.delete(p._id);
+    for (const table of ["watched", "shareHeads"] as const) {
+      const row = await ctx.db
+        .query(table)
+        .withIndex("by_share", (q) => q.eq("shareId", shareId))
+        .unique();
+      if (row) await ctx.db.delete(row._id);
+    }
     const follows = await ctx.db
       .query("follows")
       .withIndex("by_share", (q) => q.eq("shareId", shareId))
       .take(DELETE_BATCH);
     for (const f of follows) await ctx.db.delete(f._id);
-    if (events.length === DELETE_BATCH || follows.length === DELETE_BATCH) await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId });
+    if ([events, viewers, follows].some((rows) => rows.length === DELETE_BATCH)) await ctx.scheduler.runAfter(0, internal.shares.purge, { shareId });
   },
 });
 
-/** The owner's shares with live viewer counts. */
+/** The owner's most recently active shares (up to MINE_LIMIT), with live viewer counts. */
 export const mine = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     const user = await requireUser(ctx, token);
-    const shares = await ownerShares(ctx, user._id);
-    return Promise.all(
-      shares.map(async (s) => ({
+    const shares = await ctx.db
+      .query("shares")
+      .withIndex("by_owner_active", (q) => q.eq("ownerId", user._id).eq("deletedAt", undefined))
+      .order("desc")
+      .take(MINE_LIMIT);
+    const watched = await ctx.db
+      .query("watched")
+      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      .collect();
+    const viewers = new Map(watched.map((w) => [w.shareId, w.viewers]));
+    return shares.map((s) => ({
         shareId: s._id,
         slug: s.slug,
         provider: s.provider,
@@ -255,44 +277,27 @@ export const mine = query({
         listed: s.listed,
         eventCount: s.eventCount,
         updatedAt: s.updatedAt,
-        viewers: await viewerCount(ctx, s._id),
-      })),
-    );
+        viewers: viewers.get(s._id) ?? 0,
+    }));
   },
 });
 
 /**
- * Shares the daemon should keep in sync right now: those with at least one connected viewer,
- * unless the owner turned live sync off. The daemon subscribes to this.
+ * Shares with at least one connected viewer. The daemon subscribes to this and streams them,
+ * minus those live sync is off for (see ShareSync.reconcile).
  */
 export const liveDemand = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     const user = await requireUser(ctx, token);
-    if (user.liveSync === false) return [];
-    const shares = await ownerShares(ctx, user._id);
-    const demanded = [];
-    for (const s of shares) {
-      const viewer = await ctx.db
-        .query("presence")
-        .withIndex("by_share", (q) => q.eq("shareId", s._id))
-        .first();
-      if (viewer) demanded.push({ shareId: s._id, provider: s.provider, sessionId: s.sessionId });
-    }
-    return demanded;
-  },
-});
-
-/** Sessions whose shares the owner deleted. The daemon skips these instead of uploading. */
-export const deleted = query({
-  args: { token: v.string() },
-  handler: async (ctx, { token }) => {
-    const user = await requireUser(ctx, token);
-    const shares = await ctx.db
-      .query("shares")
+    const watched = await ctx.db
+      .query("watched")
       .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
       .collect();
-    return shares.filter((s) => s.deletedAt !== undefined).map((s) => ({ provider: s.provider, sessionId: s.sessionId }));
+    const shares = await Promise.all(watched.map((w) => ctx.db.get(w.shareId)));
+    return shares
+      .filter((s) => s !== null && s.deletedAt === undefined)
+      .map((s) => ({ shareId: s!._id, provider: s!.provider, sessionId: s!.sessionId }));
   },
 });
 
@@ -444,13 +449,13 @@ async function publicSummary(ctx: QueryCtx, share: Doc<"shares">) {
     provider: share.provider,
     updatedAt: share.updatedAt,
     eventCount: share.eventCount,
-    viewers: await viewerCount(ctx, share._id),
     owner: owner && { login: owner.login, avatarUrl: owner.avatarUrl },
   };
 }
 
 // --- viewers ----------------------------------------------------------------
 
+/** The share page's header. Reads no upload state, so it only re-runs when the share itself changes; see `changes`. */
 export const view = query({
   args: { slug: v.string(), token: v.optional(v.string()) },
   handler: async (ctx, { slug, token }) => {
@@ -472,8 +477,6 @@ export const view = query({
         project: share.project,
         repo: share.repo,
         provider: share.provider,
-        eventCount: share.eventCount,
-        rev: share.rev,
         updatedAt: share.updatedAt,
         isOwner,
         access: isOwner ? share.access : undefined,
@@ -489,8 +492,9 @@ export const view = query({
 });
 
 /**
- * Events changed after `afterRev`, oldest change first. Viewers page through from 0 to load the
- * share, then keep a subscription open at their latest rev to receive live changes.
+ * Events changed after `afterRev`, oldest change first, with the share's live activity. Viewers
+ * page through from 0 to load the share, then keep a subscription open at their latest rev to
+ * receive live changes.
  */
 export const changes = query({
   args: { slug: v.string(), token: v.optional(v.string()), afterRev: v.number() },
@@ -502,10 +506,13 @@ export const changes = query({
       .query("shareEvents")
       .withIndex("by_share_rev", (q) => q.eq("shareId", share._id).gt("rev", afterRev))
       .take(CHANGES_PAGE);
+    const { eventCount, updatedAt } = await headFor(ctx, share);
     return {
       events: rows.map((r) => ({ seq: r.seq, event: r.event })),
       rev: rows.at(-1)?.rev ?? afterRev,
       more: rows.length === CHANGES_PAGE,
+      eventCount,
+      updatedAt,
     };
   },
 });
@@ -520,13 +527,54 @@ async function ownShare(ctx: QueryCtx, token: string, shareId: Id<"shares">): Pr
   return share;
 }
 
-async function ownerShares(ctx: QueryCtx, ownerId: Id<"users">): Promise<Doc<"shares">[]> {
-  const shares = await ctx.db
-    .query("shares")
-    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
-    .collect();
-  return shares.filter((s) => s.deletedAt === undefined);
+type Head = Pick<Doc<"shareHeads">, "nextSeq" | "rev" | "eventCount" | "updatedAt" | "flushedAt" | "flushPending"> & {
+  _id?: Id<"shareHeads">;
+};
+
+/** A share's upload state. Shares without a head yet (new, or from before heads) start from the share. */
+export async function headFor(ctx: QueryCtx, share: Doc<"shares">): Promise<Head> {
+  const head = await ctx.db
+    .query("shareHeads")
+    .withIndex("by_share", (q) => q.eq("shareId", share._id))
+    .unique();
+  return head ?? { nextSeq: share.nextSeq ?? 0, rev: share.rev ?? 0, eventCount: share.eventCount, updatedAt: share.updatedAt };
 }
+
+/**
+ * Records an upload on the head, and gets it to the share: right away if uploads haven't
+ * reached it for ACTIVITY_MS (or ever), else by one flush scheduled for when that's up, which
+ * picks up everything since.
+ */
+async function saveHead(
+  ctx: MutationCtx,
+  share: Doc<"shares">,
+  head: Head,
+  next: Pick<Head, "nextSeq" | "rev" | "eventCount" | "updatedAt">,
+) {
+  const now = next.updatedAt;
+  const due = (head.flushedAt ?? 0) + ACTIVITY_MS;
+  const immediate = !head.flushPending && now >= due;
+  const scheduled = !head.flushPending && !immediate;
+  const fields = { ...next, ...(immediate ? { flushedAt: now } : {}), ...(scheduled ? { flushPending: true } : {}) };
+  if (head._id) await ctx.db.patch(head._id, fields);
+  else await ctx.db.insert("shareHeads", { shareId: share._id, ...fields });
+  if (immediate) await ctx.db.patch(share._id, { eventCount: next.eventCount, updatedAt: now, nextSeq: undefined, rev: undefined });
+  if (scheduled) await ctx.scheduler.runAfter(due - now, internal.shares.flushActivity, { shareId: share._id });
+}
+
+export const flushActivity = internalMutation({
+  args: { shareId: v.id("shares") },
+  handler: async (ctx, { shareId }) => {
+    const share = await ctx.db.get(shareId);
+    if (!share) return;
+    const head = await headFor(ctx, share);
+    if (!head._id) return;
+    await ctx.db.patch(head._id, { flushPending: undefined, flushedAt: Date.now() });
+    if (share.deletedAt === undefined && (head.eventCount !== share.eventCount || head.updatedAt > share.updatedAt)) {
+      await ctx.db.patch(shareId, { eventCount: head.eventCount, updatedAt: head.updatedAt, nextSeq: undefined, rev: undefined });
+    }
+  },
+});
 
 /** Live shares only: a deleted share's link behaves as if it never existed. */
 export async function shareBySlug(ctx: QueryCtx, slug: string): Promise<Doc<"shares"> | null> {
@@ -537,13 +585,12 @@ export async function shareBySlug(ctx: QueryCtx, slug: string): Promise<Doc<"sha
   return share?.deletedAt === undefined ? share : null;
 }
 
-export async function viewerCount(ctx: QueryCtx, shareId: Id<"shares">): Promise<number> {
-  return (
-    await ctx.db
-      .query("presence")
-      .withIndex("by_share", (q) => q.eq("shareId", shareId))
-      .collect()
-  ).length;
+async function viewerCount(ctx: QueryCtx, shareId: Id<"shares">): Promise<number> {
+  const row = await ctx.db
+    .query("watched")
+    .withIndex("by_share", (q) => q.eq("shareId", shareId))
+    .unique();
+  return row?.viewers ?? 0;
 }
 
 /** Key-order independent: stored documents don't promise to keep field order. */

@@ -70,7 +70,8 @@ export class Syncs {
       const sync = new ShareSync(this.store, instance);
       this.syncs.set(convexUrl, sync);
       this.offs.set(convexUrl, sync.onChange(() => this.emit()));
-      await sync.start();
+      // Connecting waits on the server; one that's down mustn't hold up local browsing or the others.
+      void sync.start().catch((error: Error) => console.error(`Couldn't connect to ${instance.name}: ${error.message}`));
     }
     this.emit();
   }

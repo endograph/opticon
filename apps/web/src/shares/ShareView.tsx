@@ -19,9 +19,9 @@ export function ShareView({ slug }: { slug: string }) {
   const token = useToken();
   const view = useQuery(api.shares.view, { slug, token });
   const ok = view?.status === "ok";
-  const events = useShareEvents(slug, token, ok);
+  const { events, activity } = useShareEvents(slug, token, ok);
   usePresence(slug, token, ok);
-  useLocalVisit(slug, token, ok ? view.share.eventCount : undefined);
+  useLocalVisit(slug, token, activity?.eventCount);
   useAccessRefresh(token, view?.status === "ok" || view?.status === "forbidden" ? view.stale : undefined);
 
   useEffect(() => {
@@ -65,7 +65,9 @@ export function ShareView({ slug }: { slug: string }) {
   }
 
   const { share, owner, viewers } = view;
-  const live = Date.now() - share.updatedAt < 120_000;
+  // The share's own updatedAt can trail uploads by a minute; the event stream has the latest.
+  const updatedAt = Math.max(share.updatedAt, activity?.updatedAt ?? 0);
+  const live = Date.now() - updatedAt < 120_000;
   return (
     <>
       <header className="session-header">
@@ -80,7 +82,7 @@ export function ShareView({ slug }: { slug: string }) {
               </Link>
             )}
             <ProjectLink project={share.project} repo={share.repo} login={owner?.login} />
-            <span>Updated {formatTime(new Date(share.updatedAt).toISOString())}</span>
+            <span>Updated {formatTime(new Date(updatedAt).toISOString())}</span>
           </div>
         </div>
         <span className="presence">
@@ -124,13 +126,24 @@ function Message({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+interface Activity {
+  eventCount: number;
+  updatedAt: number;
+}
+
 /**
  * Loads every event by paging through changes from rev 0, then keeps one subscription open at
  * the latest rev. Each change replaces an event by id; order comes from the event's fixed seq.
+ * Also returns the share's live activity, which comes with each page.
  */
-function useShareEvents(slug: string, token: string | undefined, enabled: boolean): SharedEvent[] | undefined {
+function useShareEvents(
+  slug: string,
+  token: string | undefined,
+  enabled: boolean,
+): { events?: SharedEvent[]; activity?: Activity } {
   const client = useConvex();
   const [events, setEvents] = useState<SharedEvent[]>();
+  const [activity, setActivity] = useState<Activity>();
 
   useEffect(() => {
     if (!enabled) return;
@@ -144,6 +157,7 @@ function useShareEvents(slug: string, token: string | undefined, enabled: boolea
       for (const { seq, event } of page.events) byId.set(event.id, { seq, event: event as SharedEvent });
       cursor = page.rev;
       setEvents([...byId.values()].sort((a, b) => a.seq - b.seq).map((e) => e.event));
+      setActivity({ eventCount: page.eventCount, updatedAt: page.updatedAt });
     };
     const follow = () => {
       const watch = client.watchQuery(api.shares.changes, { slug, token, afterRev: cursor });
@@ -174,7 +188,7 @@ function useShareEvents(slug: string, token: string | undefined, enabled: boolea
     };
   }, [client, slug, token, enabled]);
 
-  return events;
+  return { events, activity };
 }
 
 /** Tells the owner's daemon someone is watching, which turns on live sync for this share. */

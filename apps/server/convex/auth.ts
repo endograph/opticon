@@ -69,8 +69,27 @@ export const approveCliLogin = mutation({
 
 // --- internals used by HTTP actions -----------------------------------------
 
+const SWEEP_BATCH = 500;
+
+/** Deletes sign-ins that were started and never finished. Runs from a cron. */
+export const sweepExpired = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let more = false;
+    for (const table of ["oauthStates", "cliLogins"] as const) {
+      const expired = await ctx.db
+        .query(table)
+        .withIndex("by_expires", (q) => q.lt("expiresAt", Date.now()))
+        .take(SWEEP_BATCH);
+      for (const row of expired) await ctx.db.delete(row._id);
+      more ||= expired.length === SWEEP_BATCH;
+    }
+    if (more) await ctx.scheduler.runAfter(0, internal.auth.sweepExpired, {});
+  },
+});
+
 export const saveOauthState = internalMutation({
-  args: { state: v.string(), redirect: v.string() },
+  args: { state: v.string(), redirect: v.string(), nonce: v.string() },
   handler: async (ctx, args) => {
     await ctx.db.insert("oauthStates", { ...args, expiresAt: Date.now() + OAUTH_STATE_TTL_MS });
   },
@@ -85,7 +104,7 @@ export const consumeOauthState = internalMutation({
       .unique();
     if (!row) return null;
     await ctx.db.delete(row._id);
-    return row.expiresAt > Date.now() ? row.redirect : null;
+    return row.expiresAt > Date.now() && row.nonce ? { redirect: row.redirect, nonce: row.nonce } : null;
   },
 });
 

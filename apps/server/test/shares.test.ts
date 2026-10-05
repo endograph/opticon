@@ -3,7 +3,8 @@ import { LINK_ACCESS, PRIVATE_ACCESS, PROTOCOL_VERSION, type SharedEvent } from 
 import { convexTest } from "convex-test";
 import { api, internal } from "../convex/_generated/api";
 import { instancePolicy } from "../convex/instance";
-import { ACCESS_EXPIRY_MS, ACCESS_REFRESH_MS, decideAccess, sha256 } from "../convex/lib";
+import { ACCESS_EXPIRY_MS, ACCESS_REFRESH_MS, PRESENCE_TTL_MS, decideAccess, sha256 } from "../convex/lib";
+import { ACTIVITY_MS } from "../convex/shares";
 import schema from "../convex/schema";
 
 const modules = {
@@ -104,8 +105,45 @@ describe("shares", () => {
       [2, "b"],
     ]);
     expect(all?.rev).toBe(4);
+    expect(all?.eventCount).toBe(3);
     const live = await t.query(api.shares.changes, { slug, afterRev: 2 });
     expect(live?.events.map((e) => e.event)).toEqual([tool("t", "ok"), msg("b", "done")]);
+  });
+
+  test("uploads reach the share document at most once per ACTIVITY_MS, and a scheduled flush catches up", async () => {
+    const { t, owner, shareId } = await setup();
+    const append = (events: SharedEvent[]) => t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events });
+    const share = () => t.run(async (ctx) => (await ctx.db.get(shareId))!);
+    const scheduled = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f) => f.name.includes("flushActivity")));
+
+    // The first upload reaches the share at once; the next ones within ACTIVITY_MS wait for one flush.
+    await append([msg("a", "1")]);
+    const first = await share();
+    expect(first).toMatchObject({ eventCount: 1 });
+    await append([msg("b", "2")]);
+    await append([msg("c", "3")]);
+    expect(await share()).toEqual(first);
+    expect(await scheduled()).toHaveLength(1);
+    await t.mutation(internal.shares.flushActivity, { shareId });
+    expect(await share()).toMatchObject({ eventCount: 3 });
+
+    // Quiet for longer than ACTIVITY_MS: the next upload reaches the share at once.
+    await t.run(async (ctx) => {
+      const head = (await ctx.db.query("shareHeads").first())!;
+      await ctx.db.patch(head._id, { flushedAt: Date.now() - ACTIVITY_MS });
+    });
+    await append([msg("d", "4")]);
+    expect(await share()).toMatchObject({ eventCount: 4 });
+    expect(await scheduled()).toHaveLength(1);
+  });
+
+  test("shares from before heads keep their positions and revs", async () => {
+    const { t, owner, shareId, slug } = await setup();
+    await t.run((ctx) => ctx.db.patch(shareId, { nextSeq: 5, rev: 9, eventCount: 5 }));
+    await t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events: [msg("new", "x")] });
+    const page = await t.query(api.shares.changes, { slug, afterRev: 9 });
+    expect(page).toMatchObject({ events: [{ seq: 5 }], rev: 10, eventCount: 6 });
+    expect(await t.run((ctx) => ctx.db.get(shareId))).not.toHaveProperty("rev");
   });
 
   test("re-sharing a session updates access instead of creating a second share", async () => {
@@ -142,7 +180,6 @@ describe("shares", () => {
     expect(await t.query(api.shares.view, { slug })).toEqual({ status: "not_found" });
     expect(await t.run((ctx) => ctx.db.query("shareEvents").collect())).toEqual([]);
     expect(await t.query(api.shares.mine, { token: owner })).toEqual([]);
-    expect(await t.query(api.shares.deleted, { token: owner })).toEqual([{ provider: "claude", sessionId: "s1" }]);
     await expect(
       t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events: [msg("b", "y")] }),
     ).rejects.toThrow(/deleted/);
@@ -157,7 +194,6 @@ describe("shares", () => {
 
     const revived = await create(false);
     expect(revived.slug).not.toBe(slug);
-    expect(await t.query(api.shares.deleted, { token: owner })).toEqual([]);
     await t.finishAllScheduledFunctions(() => {});
     expect(await t.query(api.shares.view, { slug: revived.slug })).toMatchObject({ status: "ok" });
   });
@@ -328,6 +364,8 @@ describe("instance policy", () => {
         globalThis.fetch = original;
       }
       expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
+      // Unanswered checks wait to be retried instead of being picked up again at once.
+      expect(await t.query(internal.access.membersDue, { before: Date.now() - 60 * 60_000, limit: 100 })).toEqual([]);
       expect(await t.query(api.auth.me, { token: leaver })).toBeNull();
       const leaverId = (await t.run((ctx) => ctx.db.query("users").withIndex("by_login", (q) => q.eq("login", "leaver")).unique()))!._id;
       expect(await t.run((ctx) => ctx.db.query("tokens").withIndex("by_user", (q) => q.eq("userId", leaverId)).collect())).toEqual([]);
@@ -335,6 +373,27 @@ describe("instance policy", () => {
     // Without the limit, anyone still signed in is let in; the recheck signed out everyone it couldn't confirm.
     expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
     expect(await t.query(api.auth.me, { token: lapsed })).toBeNull();
+  });
+
+  test("a GitHub token refresh that fails or is already running never signs a member out", async () => {
+    const t = convexTest(schema, modules);
+    const expiring = { memberOf: "acme", memberVerifiedAt: Date.now(), memberCheckedAt: 0, githubToken: "old", githubTokenExpiresAt: Date.now() - 1 };
+    const outage = await signIn(t, "outage", { ...expiring, githubRefreshToken: "r-outage" });
+    const locked = await signIn(t, "locked", { ...expiring, githubRefreshToken: "r-locked", githubRefreshUntil: Date.now() + 60_000 });
+    const revoked = await signIn(t, "revoked", { ...expiring, githubRefreshToken: "r-revoked" });
+    await withEnv({ OPTICON_ALLOWED_ORGS: "acme" }, async () => {
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) =>
+        String(init?.body).includes("r-revoked") ? Response.json({ error: "bad_refresh_token" }) : new Response("", { status: 502 })) as typeof fetch;
+      try {
+        await t.action(internal.access.recheckMembers, {});
+      } finally {
+        globalThis.fetch = original;
+      }
+      expect(await t.query(api.auth.me, { token: outage })).toMatchObject({ login: "outage" });
+      expect(await t.query(api.auth.me, { token: locked })).toMatchObject({ login: "locked" });
+      expect(await t.query(api.auth.me, { token: revoked })).toBeNull();
+    });
   });
 });
 
@@ -359,8 +418,10 @@ describe("github sign-in and hosts", () => {
     }
   }
 
+  const NONCE = "browser-nonce-0123456789";
+
   async function signInWithGithub(t: T) {
-    const start = await t.fetch("/auth/github/start?redirect=http://127.0.0.1:4747/");
+    const start = await t.fetch(`/auth/github/start?redirect=http://127.0.0.1:4747/&nonce=${NONCE}`);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
     return t.fetch(`/auth/github/callback?state=${state}&code=c`);
   }
@@ -375,8 +436,19 @@ describe("github sign-in and hosts", () => {
 
       const allowed = await withGithubLogin("member", ["acme"], () => signInWithGithub(t));
       expect(allowed.status).toBe(302);
-      const session = new URL(allowed.headers.get("location")!).hash.replace("#session=", "");
-      expect(await t.query(api.auth.me, { token: session })).toMatchObject({ login: "member" });
+      const fragment = new URLSearchParams(new URL(allowed.headers.get("location")!).hash.slice(1));
+      expect(fragment.get("nonce")).toBe(NONCE);
+      expect(await t.query(api.auth.me, { token: fragment.get("session")! })).toMatchObject({ login: "member" });
+    });
+  });
+
+  test("sign-in must start from a browser that keeps a nonce", async () => {
+    const t = convexTest(schema, modules);
+    await withEnv({ GITHUB_CLIENT_ID: "id", OPTICON_DEV_AUTH: "1" }, async () => {
+      expect((await t.fetch("/auth/github/start?redirect=http://127.0.0.1:4747/")).status).toBe(400);
+      expect((await t.fetch("/auth/dev?login=alice")).status).toBe(400);
+      const dev = await t.fetch(`/auth/dev?login=alice&nonce=${NONCE}`);
+      expect(new URLSearchParams(new URL(dev.headers.get("location")!).hash.slice(1)).get("nonce")).toBe(NONCE);
     });
   });
 
@@ -384,7 +456,7 @@ describe("github sign-in and hosts", () => {
     const t = convexTest(schema, modules);
     await withEnv({ OPTICON_GITHUB_URL: "https://github.acme.com/", GITHUB_CLIENT_ID: "id" }, async () => {
       expect((await t.query(api.instance.policy, {})).githubUrl).toBe("https://github.acme.com");
-      const start = await t.fetch("/auth/github/start");
+      const start = await t.fetch(`/auth/github/start?nonce=${NONCE}`);
       expect(start.headers.get("location")).toStartWith("https://github.acme.com/login/oauth/authorize?");
 
       const owner = await signIn(t, "owner", { githubToken: "gh-owner" });
@@ -416,22 +488,43 @@ describe("presence and live demand", () => {
     await t.mutation(api.presence.heartbeat, { slug, viewerId: "viewer-1" });
     expect(await t.query(api.shares.liveDemand, { token: owner })).toHaveLength(1);
 
-    await t.mutation(api.auth.setLiveSync, { token: owner, liveSync: false });
-    expect(await t.query(api.shares.liveDemand, { token: owner })).toEqual([]);
-    await t.mutation(api.auth.setLiveSync, { token: owner, liveSync: true });
-
     await t.mutation(api.presence.leave, { slug, viewerId: "viewer-1" });
     expect(await t.query(api.shares.liveDemand, { token: owner })).toEqual([]);
   });
 
-  test("expiry removes a row only if no newer heartbeat refreshed it", async () => {
+  test("expiry removes a viewer only once its heartbeats lapse", async () => {
     const { t, owner, slug } = await setup();
     await t.mutation(api.presence.heartbeat, { slug, viewerId: "v" });
     const row = (await t.run((ctx) => ctx.db.query("presence").first()))!;
-    await t.mutation(internal.presence.expire, { id: row._id, lastSeen: row.lastSeen - 1 });
+    await t.mutation(internal.presence.expire, { id: row._id });
     expect(await t.query(api.shares.liveDemand, { token: owner })).toHaveLength(1);
-    await t.mutation(internal.presence.expire, { id: row._id, lastSeen: row.lastSeen });
+    await t.run((ctx) => ctx.db.patch(row._id, { lastSeen: Date.now() - PRESENCE_TTL_MS }));
+    await t.mutation(internal.presence.expire, { id: row._id });
     expect(await t.query(api.shares.liveDemand, { token: owner })).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("watched").collect())).toEqual([]);
+  });
+
+  test("viewers are counted as they arrive and leave; repeat heartbeats only touch their own row", async () => {
+    const { t, owner, slug } = await setup();
+    const viewer = await signIn(t, "viewer");
+    const beat = (viewerId: string, token?: string) => t.mutation(api.presence.heartbeat, { slug, viewerId, token });
+    await beat("a");
+    await beat("b", viewer);
+    expect(await t.query(api.shares.view, { slug })).toMatchObject({ viewers: 2 });
+    expect(await t.query(api.shares.mine, { token: owner })).toMatchObject([{ viewers: 2 }]);
+
+    const others = () => t.run(async (ctx) => ({
+      watched: await ctx.db.query("watched").collect(),
+      follows: await ctx.db.query("follows").collect(),
+      shares: await ctx.db.query("shares").collect(),
+    }));
+    const before = await others();
+    await beat("a");
+    await beat("b", viewer);
+    expect(await others()).toEqual(before);
+
+    await t.mutation(api.presence.leave, { slug, viewerId: "a" });
+    expect(await t.query(api.shares.view, { slug })).toMatchObject({ viewers: 1 });
   });
 
   test("heartbeats are rejected for viewers without access", async () => {
@@ -466,14 +559,16 @@ describe("follows", () => {
     const append = (events: SharedEvent[]) => t.mutation(api.shares.append, { token: owner, protocol: PROTOCOL_VERSION, shareId, events });
     await append([msg("a", "hi")]);
     await view(t, slug, viewer);
+    await t.mutation(internal.shares.flushActivity, { shareId });
     await append([msg("b", "more"), tool("t", "running")]);
-    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 2, eventCount: 3, viewers: 1 }]);
+    await t.mutation(internal.shares.flushActivity, { shareId });
+    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 2, eventCount: 3 }]);
 
     await t.mutation(api.presence.leave, { slug, viewerId: viewer, token: viewer });
-    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 0, viewers: 0 }]);
+    expect(await t.query(api.follows.list, { token: viewer })).toMatchObject([{ unread: 0 }]);
   });
 
-  test("lost access leaves an unavailable entry, and unsharing deletes it", async () => {
+  test("lost access leaves an unavailable entry that can be unfollowed, and deleting the share purges it", async () => {
     const { t, owner, shareId, slug } = await setup();
     const viewer = await signIn(t, "viewer");
     await view(t, slug, viewer);
@@ -482,6 +577,9 @@ describe("follows", () => {
     const [entry] = await t.query(api.follows.list, { token: viewer });
     expect(entry).toEqual({ slug, available: false, lastViewedAt: expect.any(Number), unread: 0 });
     await expect(view(t, slug, viewer)).rejects.toThrow(/forbidden/);
+    await expect(t.mutation(api.follows.setFollowing, { token: viewer, slug, following: true })).rejects.toThrow(/forbidden/);
+    await t.mutation(api.follows.setFollowing, { token: viewer, slug, following: false });
+    expect(await t.query(api.follows.list, { token: viewer })).toEqual([]);
 
     await t.mutation(api.shares.remove, { token: owner, shareId });
     await t.finishAllScheduledFunctions(() => {});
@@ -542,6 +640,18 @@ describe("cli login", () => {
     expect(approved).toMatchObject({ status: "approved", login: "owner" });
     expect(await t.query(api.auth.me, { token: approved.token })).toMatchObject({ login: "owner" });
     expect(await poll()).toEqual({ status: "expired" });
+  });
+
+  test("abandoned sign-ins are swept once they expire", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("oauthStates", { state: "old", redirect: "/", nonce: "n", expiresAt: Date.now() - 1 });
+      await ctx.db.insert("oauthStates", { state: "new", redirect: "/", nonce: "n", expiresAt: Date.now() + 60_000 });
+      await ctx.db.insert("cliLogins", { userCode: "OLD", pollHash: "h", label: "l", expiresAt: Date.now() - 1 });
+    });
+    await t.mutation(internal.auth.sweepExpired, {});
+    expect(await t.run(async (ctx) => (await ctx.db.query("oauthStates").collect()).map((r) => r.state))).toEqual(["new"]);
+    expect(await t.run((ctx) => ctx.db.query("cliLogins").collect())).toEqual([]);
   });
 });
 

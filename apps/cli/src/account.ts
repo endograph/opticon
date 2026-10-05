@@ -201,14 +201,10 @@ export async function login(open: (url: string) => Promise<boolean>): Promise<Au
   if (!start.ok) throw new Error(`Login failed to start (${start.status}).`);
   const { userCode, pollSecret, verifyUrl } = (await start.json()) as { userCode: string; pollSecret: string; verifyUrl: string };
 
-  // Sign in with GitHub first, then land on the approval page. The dev stack has no GitHub,
-  // and its approval page offers its own sign-in.
-  const link = process.env.OPTICON_DEV
-    ? verifyUrl
-    : `${ep.siteUrl}/auth/github/start?redirect=${encodeURIComponent(verifyUrl)}`;
-  console.log(`\nSign in with GitHub and approve this login:\n${link}\n\nCheck that the page shows the code ${userCode}.`);
+  // The approval page signs in first if needed; sign-in has to start in the browser (see session.ts).
+  console.log(`\nSign in with GitHub and approve this login:\n${verifyUrl}\n\nCheck that the page shows the code ${userCode}.`);
   // Over SSH a browser would open on the remote machine's screen, not yours.
-  if (!process.env.SSH_CONNECTION && (await open(link))) console.log("(Opened in your browser.)");
+  if (!process.env.SSH_CONNECTION && (await open(verifyUrl))) console.log("(Opened in your browser.)");
   console.log("\nWaiting for approval…");
 
   const deadline = Date.now() + 10 * 60_000;
