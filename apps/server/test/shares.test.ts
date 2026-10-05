@@ -258,23 +258,28 @@ describe("access", () => {
 
     const stranger = await signIn(t, "stranger");
     expect(await t.query(api.shares.view, { slug, token: stranger })).toMatchObject({
-      status: "forbidden", stale: { memberships: true, repos: [] },
+      status: "forbidden", stale: { groups: ["acme/platform"], repos: [] },
     });
     expect(await t.query(api.shares.changes, { slug, token: stranger, afterRev: 0 })).toBeNull();
 
-    const member = await signIn(t, "member", { teams: ["acme/platform"], membershipCheckedAt: Date.now() });
+    const member = await signIn(t, "member");
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query("users").withIndex("by_login", (q) => q.eq("login", "member")).unique())!._id;
+      await ctx.db.insert("groupMembers", { userId, group: "acme/platform", member: true, checkedAt: Date.now() });
+    });
     expect((await t.query(api.shares.view, { slug, token: member })).status).toBe("ok");
   });
 
   test("cached membership is refreshed after a while and stops counting after longer", () => {
     const policy = instancePolicy();
     const share = { access: { ...PRIVATE_ACCESS, orgs: ["acme"] }, ownerId: "o" as never };
-    const viewer = (age: number) => ({ _id: "v", login: "v", orgs: ["acme"], teams: [], membershipCheckedAt: 1e12 - age }) as never;
-    expect(decideAccess(policy, share, viewer(0), {}, 1e12)).toEqual({ ok: true });
-    expect(decideAccess(policy, share, viewer(ACCESS_REFRESH_MS + 1), {}, 1e12)).toEqual({ ok: true, stale: { memberships: true, repos: [] } });
-    expect(decideAccess(policy, share, viewer(ACCESS_EXPIRY_MS + 1), {}, 1e12)).toMatchObject({ ok: false, reason: "forbidden" });
+    const viewer = { _id: "v", login: "v" } as never;
+    const member = (age: number) => ({ groups: { acme: { member: true, checkedAt: 1e12 - age } } });
+    expect(decideAccess(policy, share, viewer, member(0), 1e12)).toEqual({ ok: true });
+    expect(decideAccess(policy, share, viewer, member(ACCESS_REFRESH_MS + 1), 1e12)).toEqual({ ok: true, stale: { groups: ["acme"], repos: [] } });
+    expect(decideAccess(policy, share, viewer, member(ACCESS_EXPIRY_MS + 1), 1e12)).toMatchObject({ ok: false, reason: "forbidden" });
     const users = { access: { ...PRIVATE_ACCESS, users: ["x"] }, ownerId: "o" as never };
-    expect(decideAccess(policy, users, viewer(ACCESS_EXPIRY_MS + 1), {}, 1e12)).toEqual({ ok: false, reason: "forbidden", stale: undefined });
+    expect(decideAccess(policy, users, viewer, member(ACCESS_EXPIRY_MS + 1), 1e12)).toEqual({ ok: false, reason: "forbidden", stale: undefined });
   });
 
   test("the repo grant follows GitHub: everyone for a public repo, readers for a private one", async () => {
@@ -294,14 +299,14 @@ describe("access", () => {
     expect((await t.query(api.shares.view, { slug: open })).status).toBe("ok");
     expect((await t.query(api.shares.view, { slug: secret })).status).toBe("login_required");
     expect(await t.query(api.shares.view, { slug: secret, token: reader })).toMatchObject({
-      status: "forbidden", stale: { memberships: false, repos: ["acme/secret"] },
+      status: "forbidden", stale: { groups: [], repos: ["acme/secret"] },
     });
     expect((await t.query(api.shares.repoShares, { repo: "acme/secret", token: reader })).stale.repos).toEqual(["acme/secret"]);
 
     // Each viewer asks GitHub with their own token.
     const answers = (pull: boolean) => ({ "acme/secret": { full_name: "acme/secret", private: true, pull } });
-    await withRepos(answers(true), () => t.action(api.access.refresh, { token: reader, memberships: false, repos: ["acme/secret"] }));
-    await withRepos(answers(false), () => t.action(api.access.refresh, { token: outsider, memberships: false, repos: ["acme/secret"] }));
+    await withRepos(answers(true), () => t.action(api.access.refresh, { token: reader, groups: [], repos: ["acme/secret"] }));
+    await withRepos(answers(false), () => t.action(api.access.refresh, { token: outsider, groups: [], repos: ["acme/secret"] }));
     expect((await t.query(api.shares.view, { slug: secret, token: reader })).status).toBe("ok");
     const denied = await t.query(api.shares.view, { slug: secret, token: outsider });
     expect(denied.status).toBe("forbidden");
@@ -672,16 +677,16 @@ describe("GitHub token refresh", () => {
         return Response.json({ access_token: "fresh", expires_in: 28800, refresh_token: "refresh-new", refresh_token_expires_in: 15897600 });
       }
       expect((init?.headers as Record<string, string>).authorization).toBe("Bearer fresh");
-      return Response.json(url.includes("/teams") ? [{ slug: "platform", organization: { login: "Acme" } }] : [{ login: "Acme" }]);
+      return Response.json({ state: "active" });
     }) as typeof fetch;
     try {
-      expect(await t.action(api.access.refresh, { token, memberships: true, repos: [] })).toEqual({ orgs: ["acme"], teams: ["acme/platform"] });
+      await t.action(api.access.refresh, { token, groups: ["acme", "acme/platform"], repos: [] });
       const user = await t.run((ctx) => ctx.db.query("users").first());
       expect(user).toMatchObject({ githubToken: "fresh", githubRefreshToken: "refresh-new" });
       expect(user?.githubRefreshUntil).toBeUndefined();
       expect(user?.githubTokenExpiresAt).toBeGreaterThan(Date.now());
       expect(requests).toHaveLength(3);
-      await t.action(api.access.refresh, { token, memberships: true, repos: [] });
+      await t.action(api.access.refresh, { token, groups: ["acme"], repos: [] });
       expect(requests.filter((url) => url.includes("access_token"))).toHaveLength(1);
     } finally { globalThis.fetch = original; }
   });
@@ -689,17 +694,16 @@ describe("GitHub token refresh", () => {
   test("failed refresh preserves membership and releases the refresh lock", async () => {
     const t = convexTest(schema, modules);
     const token = await signIn(t, "viewer", {
-      githubToken: "expired", githubTokenExpiresAt: Date.now() - 1,
-      githubRefreshToken: "refresh", orgs: ["acme"], membershipCheckedAt: 123,
+      githubToken: "expired", githubTokenExpiresAt: Date.now() - 1, githubRefreshToken: "refresh",
     });
+    const user = (await t.run((ctx) => ctx.db.query("users").first()))!;
+    await t.run((ctx) => ctx.db.insert("groupMembers", { userId: user._id, group: "acme", member: true, checkedAt: 123 }));
     const original = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({ error: "bad_refresh_token" })) as unknown as typeof fetch;
     try {
-      expect(await t.action(api.access.refresh, { token, memberships: true, repos: [] })).toBeNull();
-      expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({
-        orgs: ["acme"], membershipCheckedAt: 123, githubToken: "expired",
-      });
-      const user = (await t.run((ctx) => ctx.db.query("users").first()))!;
+      await t.action(api.access.refresh, { token, groups: ["acme"], repos: [] });
+      expect(await t.run((ctx) => ctx.db.query("groupMembers").first())).toMatchObject({ member: true, checkedAt: 123 });
+      expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({ githubToken: "expired" });
       expect(await t.mutation(internal.auth.claimGithubRefresh, { userId: user._id, refreshToken: "refresh" })).toBe(true);
     } finally { globalThis.fetch = original; }
   });
@@ -716,16 +720,48 @@ describe("GitHub token refresh", () => {
     expect(await t.run((ctx) => ctx.db.get(userId))).toMatchObject({ githubToken: "new-login", githubRefreshToken: "r2" });
   });
 
-  test("membership API failure never saves a partial membership list", async () => {
+  test("membership is checked per grant; outages and rate limits, secondary ones too, change nothing", async () => {
     const t = convexTest(schema, modules);
-    const token = await signIn(t, "viewer", { githubToken: "valid", orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
+    const token = await signIn(t, "viewer", { githubToken: "valid" });
+    const userId = (await t.run((ctx) => ctx.db.query("users").first()))!._id;
+    const groups = ["outage", "limited", "throttled", "quiet-throttle", "outsider", "acme", "acme/platform"];
+    await t.run(async (ctx) => {
+      for (const group of groups) await ctx.db.insert("groupMembers", { userId, group, member: true, checkedAt: 123 });
+    });
     const original = globalThis.fetch;
-    globalThis.fetch = (async (input: string | URL | Request) => String(input).includes("/teams")
-      ? new Response("Unavailable", { status: 503 }) : Response.json([{ login: "Other" }])) as typeof fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/orgs/outage")) return new Response("Unavailable", { status: 503 });
+      if (url.endsWith("/orgs/limited")) return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+      if (url.endsWith("/orgs/throttled")) return new Response("", { status: 403, headers: { "retry-after": "60", "x-ratelimit-remaining": "4000" } });
+      if (url.endsWith("/orgs/quiet-throttle")) return Response.json({ message: "You have exceeded a secondary rate limit." }, { status: 403 });
+      if (url.endsWith("/orgs/outsider")) return new Response("Not Found", { status: 404 });
+      return Response.json({ state: "active" });
+    }) as typeof fetch;
     try {
-      await expect(t.action(api.access.refresh, { token, memberships: true, repos: [] })).rejects.toThrow(/503/);
-      expect(await t.run((ctx) => ctx.db.query("users").first())).toMatchObject({ orgs: ["acme"], teams: ["acme/platform"], membershipCheckedAt: 123 });
+      await t.action(api.access.refresh, { token, groups, repos: [] });
     } finally { globalThis.fetch = original; }
+    // Teams are checked for the viewer by login; neither list endpoint is used.
+    expect(urls).toContain("https://api.github.com/orgs/acme/teams/platform/memberships/viewer");
+    expect(urls.some((u) => u.endsWith("/user/orgs") || u.endsWith("/user/teams"))).toBe(false);
+    const rows = await t.run((ctx) => ctx.db.query("groupMembers").collect());
+    const answered = rows.filter((r) => r.checkedAt !== 123).map((r) => [r.group, r.member]);
+    expect(answered.sort()).toEqual([["acme", true], ["acme/platform", true], ["outsider", false]]);
+  });
+
+  test("a secondary rate limit during the membership recheck signs nobody out", async () => {
+    const t = convexTest(schema, modules);
+    const member = await signIn(t, "member", { memberOf: "acme", memberVerifiedAt: Date.now(), memberCheckedAt: 0, githubToken: "gh" });
+    await withEnv({ OPTICON_ALLOWED_ORGS: "acme" }, async () => {
+      const original = globalThis.fetch;
+      globalThis.fetch = (async () => new Response("", { status: 403, headers: { "retry-after": "60" } })) as unknown as typeof fetch;
+      try {
+        await t.action(internal.access.recheckMembers, {});
+      } finally { globalThis.fetch = original; }
+      expect(await t.query(api.auth.me, { token: member })).toMatchObject({ login: "member" });
+    });
   });
 });
 

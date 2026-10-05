@@ -4,43 +4,70 @@ import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, type MutationCtx, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { githubApi, githubApiHeaders, githubUrl } from "./github";
 import { instancePolicy } from "./instance";
-import { ACCESS_REFRESH_MS } from "./lib";
-
 const MAX_REPO_REFRESH = 20;
+const MAX_GROUP_REFRESH = 20;
 const MEMBER_RECHECK_MS = 60 * 60_000;
 /** A membership check GitHub couldn't answer is retried after this, not immediately. */
 const MEMBER_RETRY_MS = 15 * 60_000;
 const MEMBER_BATCH = 100;
 
 /**
- * Refreshes what GitHub says about the viewer, using their own token: org and team membership
- * (read:org) and read access to `repos`. Viewers call this with a decision's `stale`; queries
- * then re-evaluate reactively once the answers are saved. Repos GitHub can't answer for are left
- * as they were.
+ * Refreshes what GitHub says about the viewer, using their own token: whether they're in `groups`
+ * (orgs, and teams as `org/team`), and whether they can read `repos`. Viewers call this with a
+ * decision's `stale`; queries then re-evaluate reactively once the answers are saved. Anything
+ * GitHub can't answer for is left as it was.
  *
- * Orgs that restrict third-party OAuth apps hide membership until an admin approves Opticon, so
- * those orgs simply won't appear here.
+ * Orgs that restrict third-party apps hide membership until an admin approves Opticon, so their
+ * members count as outside them until then.
  */
 export const refresh = action({
-  args: { token: v.string(), memberships: v.boolean(), repos: v.array(v.string()), force: v.optional(v.boolean()) },
-  handler: async (ctx, { token, memberships, repos, force }): Promise<{ orgs: string[]; teams: string[] } | null> => {
+  args: { token: v.string(), groups: v.array(v.string()), repos: v.array(v.string()) },
+  handler: async (ctx, { token, groups, repos }): Promise<void> => {
     const viewer = await ctx.runQuery(internal.auth.githubToken, { token });
     const headers = viewer && (await githubHeaders(ctx, viewer));
-    if (!viewer || !headers) return null;
-    await Promise.all(repos.slice(0, MAX_REPO_REFRESH).map((repo) => refreshRepoRead(ctx, viewer.userId, headers, repo.toLowerCase())));
-    if (!memberships) return null;
-    const orgs = (await paginate<{ login: string }>(`${githubApi()}/user/orgs`, headers)).map((o) => o.login.toLowerCase());
-    const teams = (await paginate<{ slug: string; organization: { login: string } }>(`${githubApi()}/user/teams`, headers)).map(
-      (t) => `${t.organization.login}/${t.slug}`.toLowerCase(),
-    );
-    await ctx.runMutation(internal.access.saveMemberships, { userId: viewer.userId, orgs, teams, force: force ?? false });
-    return { orgs, teams };
+    if (!viewer || !headers) return;
+    await Promise.all([
+      ...repos.slice(0, MAX_REPO_REFRESH).map((repo) => refreshRepoRead(ctx, viewer.userId, headers, repo.toLowerCase())),
+      ...groups.slice(0, MAX_GROUP_REFRESH).map(async (group) => {
+        const member = await groupMembership(headers, group.toLowerCase(), viewer.login).catch(() => undefined);
+        if (member !== undefined) await ctx.runMutation(internal.access.saveGroupMember, { userId: viewer.userId, group: group.toLowerCase(), member });
+      }),
+    ]);
   },
 });
 
+export const saveGroupMember = internalMutation({
+  args: { userId: v.id("users"), group: v.string(), member: v.boolean() },
+  handler: async (ctx, { userId, group, member }) => {
+    const existing = await ctx.db
+      .query("groupMembers")
+      .withIndex("by_user_group", (q) => q.eq("userId", userId).eq("group", group))
+      .unique();
+    if (existing) await ctx.db.patch(existing._id, { member, checkedAt: Date.now() });
+    else await ctx.db.insert("groupMembers", { userId, group, member, checkedAt: Date.now() });
+  },
+});
+
+/**
+ * Whether GitHub says the token's user is an active member of `group`: an org (`acme`), or a
+ * team (`acme/platform`). Throws when GitHub can't answer, e.g. when rate limited.
+ */
+export async function groupMembership(headers: Record<string, string>, group: string, login: string): Promise<boolean> {
+  const [org, team] = group.split("/");
+  const url = team
+    ? `${githubApi()}/orgs/${encodeURIComponent(org!)}/teams/${encodeURIComponent(team)}/memberships/${encodeURIComponent(login)}`
+    : `${githubApi()}/user/memberships/orgs/${encodeURIComponent(org!)}`;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+  if (await rateLimited(res)) throw new Error("GitHub rate limit");
+  // 403: the org restricts Opticon's GitHub app; membership can't be seen, so it doesn't count.
+  if (res.status === 401 || res.status === 403 || res.status === 404) return false;
+  if (!res.ok) throw new Error(`GitHub membership check failed (${res.status})`);
+  return ((await res.json()) as { state?: string }).state === "active";
+}
+
 async function refreshRepoRead(ctx: ActionCtx, userId: Id<"users">, headers: Record<string, string>, repo: string): Promise<void> {
   const res = await fetch(`${githubApi()}/repos/${repo}`, { headers, signal: AbortSignal.timeout(10_000) }).catch(() => null);
-  if (!res || rateLimited(res)) return;
+  if (!res || (await rateLimited(res))) return;
   // GitHub answers 404 for private repos the user can't see; 403 when an org blocks Opticon.
   if (res.status === 403 || res.status === 404) {
     await ctx.runMutation(internal.access.saveRepoRead, { userId, repo, canRead: false });
@@ -83,14 +110,7 @@ export async function saveVisibility(ctx: MutationCtx, repo: string, isPrivate: 
  * when GitHub can't answer, so an outage never counts as leaving the org.
  */
 export async function allowedOrgMembership(headers: Record<string, string>, orgs: string[]): Promise<string | null> {
-  for (const org of orgs) {
-    const res = await fetch(`${githubApi()}/user/memberships/orgs/${org}`, { headers, signal: AbortSignal.timeout(10_000) });
-    if (rateLimited(res)) throw new Error("GitHub rate limit");
-    // 403: the org restricts Opticon's GitHub app; membership can't be seen, so it doesn't count.
-    if (res.status === 401 || res.status === 403 || res.status === 404) continue;
-    if (!res.ok) throw new Error(`GitHub membership check failed (${res.status})`);
-    if (((await res.json()) as { state?: string }).state === "active") return org;
-  }
+  for (const org of orgs) if (await groupMembership(headers, org, "")) return org;
   return null;
 }
 
@@ -159,6 +179,7 @@ export const settleMember = internalMutation({
 
 export interface GithubCredentials {
   userId: Id<"users">;
+  login: string;
   githubToken?: string;
   expiresAt?: number;
   refreshToken?: string;
@@ -217,31 +238,13 @@ async function refreshGithubToken(ctx: ActionCtx, viewer: GithubCredentials): Pr
   }
 }
 
-export const saveMemberships = internalMutation({
-  args: { userId: v.id("users"), orgs: v.array(v.string()), teams: v.array(v.string()), force: v.boolean() },
-  handler: async (ctx, { userId, orgs, teams, force }) => {
-    const user = await ctx.db.get(userId);
-    if (!user) return;
-    // Concurrent viewers of several shares may all refresh at once; one write per TTL is enough.
-    if (!force && user.membershipCheckedAt && Date.now() - user.membershipCheckedAt < ACCESS_REFRESH_MS / 10) return;
-    await ctx.db.patch(userId, { orgs, teams, membershipCheckedAt: Date.now() });
-  },
-});
-
-/** GitHub signals rate limits with 429, or 403 and no requests remaining. Never an answer. */
-function rateLimited(res: Response): boolean {
-  return res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0");
-}
-
-async function paginate<T>(url: string, headers: Record<string, string>): Promise<T[]> {
-  const results: T[] = [];
-  let next: string | undefined = `${url}?per_page=100`;
-  for (let page = 0; next && page < 10; page++) {
-    const res: Response = await fetch(next, { headers });
-    // An API failure must not replace cached memberships with an incomplete list.
-    if (!res.ok) throw new Error(`GitHub membership request failed (${res.status})`);
-    results.push(...((await res.json()) as T[]));
-    next = res.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
-  }
-  return results;
+/**
+ * Whether GitHub refused for a rate limit, which is never an answer: 429, or 403 with no requests
+ * left, a Retry-After (secondary limits, which leave requests remaining), or a message saying so.
+ */
+export async function rateLimited(res: Response): Promise<boolean> {
+  if (res.status === 429) return true;
+  if (res.status !== 403) return false;
+  if (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after")) return true;
+  return /rate limit/i.test(await res.clone().text().catch(() => ""));
 }

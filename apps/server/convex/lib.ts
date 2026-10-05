@@ -58,9 +58,9 @@ export function requireProtocol(protocol: number): void {
   }
 }
 
-/** GitHub answers a viewer should refresh: their org and team membership, and repos they may read. */
+/** GitHub answers a viewer should refresh: orgs and teams (`org/team`) they may be in, and repos they may read. */
 export interface Stale {
-  memberships: boolean;
+  groups: string[];
   repos: string[];
 }
 
@@ -71,11 +71,14 @@ export type AccessDecision =
   /** `stale`: may be allowed once these are refreshed. */
   | { ok: false; reason: "forbidden"; stale?: Stale };
 
-/** What's known about a share's repo, for its `repo` grant. */
-export interface RepoFacts {
+/** What's known about the viewer and a share, for its grants. */
+export interface AccessFacts {
+  /** The share's repo, for its `repo` grant. */
   visibility?: { private: boolean; checkedAt: number };
-  /** The viewer's read access. */
+  /** The viewer's read access to the share's repo. */
   read?: { canRead: boolean; checkedAt: number };
+  /** The viewer's membership in the share's orgs and teams, by `org` or `org/team`. */
+  groups?: Record<string, { member: boolean; checkedAt: number }>;
 }
 
 /**
@@ -87,7 +90,7 @@ export function decideAccess(
   policy: InstancePolicy,
   share: Pick<Doc<"shares">, "access" | "ownerId" | "repo">,
   viewer: Doc<"users"> | null,
-  facts: RepoFacts = {},
+  facts: AccessFacts = {},
   now = Date.now(),
 ): AccessDecision {
   if (viewer && viewer._id === share.ownerId) return { ok: true };
@@ -99,15 +102,16 @@ export function decideAccess(
   if (!viewer) return { ok: false, reason: "login_required" };
   if (access.users.includes(viewer.login)) return { ok: true };
 
-  const stale: Stale = { memberships: false, repos: [] };
-  const staleOrUndefined = () => (stale.memberships || stale.repos.length ? stale : undefined);
-  if (access.orgs.length || access.teams.length) {
-    const age = now - (viewer.membershipCheckedAt ?? Number.NEGATIVE_INFINITY);
-    stale.memberships = age > ACCESS_REFRESH_MS;
-    const orgs = viewer.orgs ?? [];
-    const teams = viewer.teams ?? [];
-    const member = access.orgs.some((o) => orgs.includes(o)) || access.teams.some((t) => teams.includes(t));
-    if (member && age < ACCESS_EXPIRY_MS) return { ok: true, stale: staleOrUndefined() };
+  const stale: Stale = { groups: [], repos: [] };
+  const staleOrUndefined = () => (stale.groups.length || stale.repos.length ? stale : undefined);
+  const groups = [...access.orgs, ...access.teams];
+  if (groups.length) {
+    const age = (group: string) => now - (facts.groups?.[group]?.checkedAt ?? Number.NEGATIVE_INFINITY);
+    const memberOf = groups.filter((g) => facts.groups?.[g]?.member && age(g) < ACCESS_EXPIRY_MS);
+    // A fresh yes settles it; otherwise refresh whatever is due.
+    if (memberOf.some((g) => age(g) <= ACCESS_REFRESH_MS)) return { ok: true };
+    stale.groups.push(...groups.filter((g) => age(g) > ACCESS_REFRESH_MS));
+    if (memberOf.length) return { ok: true, stale: staleOrUndefined() };
   }
   if (repo) {
     const age = now - (facts.read?.checkedAt ?? Number.NEGATIVE_INFINITY);
@@ -123,18 +127,30 @@ export function decideAccess(
  */
 export function viewChecker(ctx: QueryCtx, viewer: Doc<"users"> | null) {
   const policy = instancePolicy();
-  const facts = new Map<string, Promise<RepoFacts>>();
-  const stale: Stale = { memberships: false, repos: [] };
-  const factsFor = (repo: string) => {
-    let found = facts.get(repo);
-    if (!found) facts.set(repo, (found = repoFacts(ctx, repo, viewer)));
+  const repos = new Map<string, Promise<AccessFacts>>();
+  const groups = new Map<string, Promise<{ member: boolean; checkedAt: number } | null>>();
+  const stale: Stale = { groups: [], repos: [] };
+  const repoFactsFor = (repo: string) => {
+    let found = repos.get(repo);
+    if (!found) repos.set(repo, (found = repoFacts(ctx, repo, viewer)));
+    return found;
+  };
+  const groupFactFor = (group: string) => {
+    let found = groups.get(group);
+    if (!found) groups.set(group, (found = groupFact(ctx, group, viewer!)));
     return found;
   };
   const decide = async (share: Doc<"shares">): Promise<AccessDecision> => {
-    const needsFacts = share.access.repo && share.repo && share.ownerId !== viewer?._id;
-    const decision = decideAccess(policy, share, viewer, needsFacts ? await factsFor(share.repo!) : {});
+    const owner = !!viewer && share.ownerId === viewer._id;
+    const facts: AccessFacts = !owner && share.access.repo && share.repo ? { ...(await repoFactsFor(share.repo)) } : {};
+    if (viewer && !owner) {
+      const names = [...share.access.orgs, ...share.access.teams];
+      const found = await Promise.all(names.map(groupFactFor));
+      facts.groups = Object.fromEntries(names.flatMap((name, i) => (found[i] ? [[name, found[i]]] : [])));
+    }
+    const decision = decideAccess(policy, share, viewer, facts);
     if ("stale" in decision && decision.stale) {
-      stale.memberships ||= decision.stale.memberships;
+      for (const group of decision.stale.groups) if (!stale.groups.includes(group)) stale.groups.push(group);
       for (const repo of decision.stale.repos) if (!stale.repos.includes(repo)) stale.repos.push(repo);
     }
     return decision;
@@ -154,7 +170,15 @@ export async function canView(ctx: QueryCtx, share: Doc<"shares">, viewer: Doc<"
   return viewChecker(ctx, viewer).decide(share);
 }
 
-async function repoFacts(ctx: QueryCtx, repo: string, viewer: Doc<"users"> | null): Promise<RepoFacts> {
+async function groupFact(ctx: QueryCtx, group: string, viewer: Doc<"users">) {
+  const row = await ctx.db
+    .query("groupMembers")
+    .withIndex("by_user_group", (q) => q.eq("userId", viewer._id).eq("group", group))
+    .unique();
+  return row && { member: row.member, checkedAt: row.checkedAt };
+}
+
+async function repoFacts(ctx: QueryCtx, repo: string, viewer: Doc<"users"> | null): Promise<AccessFacts> {
   const visibility = await ctx.db
     .query("repoVisibility")
     .withIndex("by_repo", (q) => q.eq("repo", repo))

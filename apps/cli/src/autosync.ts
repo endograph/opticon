@@ -2,6 +2,7 @@ import type { ShareAccess } from "@opticon/core";
 import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DEFAULT_INSTANCE, endpoints } from "./account";
+import { withFileLock, writeFileAtomic } from "./files";
 import { OPTICON_HOME } from "./paths";
 
 export const AUTOSYNC_FILE = join(OPTICON_HOME, "autosync.json");
@@ -60,8 +61,8 @@ function upgradeRule({ discoverable, ...rule }: StoredRule): AutosyncRule {
   return { ...rule, instance: rule.instance ?? DEFAULT_INSTANCE.convexUrl, share, listed: rule.listed ?? discoverable };
 }
 
-export async function writeRules(rules: AutosyncRule[]): Promise<void> {
-  await Bun.write(AUTOSYNC_FILE, `${JSON.stringify({ rules }, null, 2)}\n`);
+function writeRules(rules: AutosyncRule[]): Promise<void> {
+  return writeFileAtomic(AUTOSYNC_FILE, `${JSON.stringify({ rules }, null, 2)}\n`);
 }
 
 type RuleTarget = Pick<AutosyncRule, "instance" | "repo" | "path">;
@@ -80,18 +81,22 @@ export async function newRule(dir: string, access: ShareAccess, instance = endpo
 }
 
 /** Adds or replaces the rule for the same instance and repo or path. */
-export async function addRule(rule: AutosyncRule): Promise<AutosyncRule[]> {
-  const rules = (await readRules()).filter((r) => !sameTarget(r, rule));
-  rules.push(rule);
-  await writeRules(rules);
-  return rules;
+export function addRule(rule: AutosyncRule): Promise<AutosyncRule[]> {
+  return withFileLock(AUTOSYNC_FILE, async () => {
+    const rules = (await readRules()).filter((r) => !sameTarget(r, rule));
+    rules.push(rule);
+    await writeRules(rules);
+    return rules;
+  });
 }
 
-export async function removeRule(rule: RuleTarget): Promise<boolean> {
-  const rules = await readRules();
-  const kept = rules.filter((r) => !sameTarget(r, rule));
-  await writeRules(kept);
-  return kept.length !== rules.length;
+export function removeRule(rule: RuleTarget): Promise<boolean> {
+  return withFileLock(AUTOSYNC_FILE, async () => {
+    const rules = await readRules();
+    const kept = rules.filter((r) => !sameTarget(r, rule));
+    await writeRules(kept);
+    return kept.length !== rules.length;
+  });
 }
 
 export const describeRule = (rule: Pick<AutosyncRule, "repo" | "path">) => rule.repo ?? rule.path ?? "?";
@@ -101,11 +106,13 @@ function sameTarget(a: RuleTarget, b: RuleTarget): boolean {
 }
 
 /** Drops every rule for an instance, e.g. when it's removed. Returns how many there were. */
-export async function removeInstanceRules(instance: string): Promise<number> {
-  const rules = await readRules();
-  const kept = rules.filter((r) => r.instance !== instance);
-  if (kept.length !== rules.length) await writeRules(kept);
-  return rules.length - kept.length;
+export function removeInstanceRules(instance: string): Promise<number> {
+  return withFileLock(AUTOSYNC_FILE, async () => {
+    const rules = await readRules();
+    const kept = rules.filter((r) => r.instance !== instance);
+    if (kept.length !== rules.length) await writeRules(kept);
+    return rules.length - kept.length;
+  });
 }
 
 /** Whether a session's working directory falls under `rule`. `repo` is the cwd's remote, if any. */

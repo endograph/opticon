@@ -6,6 +6,12 @@ import { OPTICON_HOME } from "../paths";
 import type { SessionStore } from "./store";
 import { ShareSync } from "./sync";
 
+export class UnknownInstanceError extends Error {
+  constructor(convexUrl: string) {
+    super(`${convexUrl} isn't set up on this machine anymore. Reload the page.`);
+  }
+}
+
 /**
  * One ShareSync per known server, all fed by the same session store, so autosync and live
  * updates keep working for every server whichever one is selected. Servers you aren't signed
@@ -41,9 +47,15 @@ export class Syncs {
     return this.syncs.get(endpoints().convexUrl) ?? [...this.syncs.values()][0]!;
   }
 
-  /** The sync for a backend URL, falling back to the selected server's. */
+  /**
+   * The sync for a backend URL, or the selected server's when none is given. A URL that isn't
+   * set up here (a page left open on a removed server) is refused rather than sent elsewhere.
+   */
   for(convexUrl: string | null | undefined): ShareSync {
-    return (convexUrl && this.syncs.get(convexUrl)) || this.selected();
+    if (!convexUrl) return this.selected();
+    const sync = this.syncs.get(convexUrl);
+    if (!sync) throw new UnknownInstanceError(convexUrl);
+    return sync;
   }
 
   all(): ShareSync[] {

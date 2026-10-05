@@ -2,9 +2,10 @@ import type { ShareAccess } from "@opticon/core";
 import { api } from "@opticon/server/api";
 import { ConvexHttpClient } from "convex/browser";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { withFileLock, writeFileAtomic } from "./files";
 import { OPTICON_HOME } from "./paths";
 
 export const AUTH_FILE = join(OPTICON_HOME, "auth.json");
@@ -169,10 +170,9 @@ async function readAuthFile(): Promise<AuthFile> {
   return data as AuthFile;
 }
 
-async function writeAuthFile(data: AuthFile): Promise<void> {
-  await mkdir(OPTICON_HOME, { recursive: true });
-  await Bun.write(AUTH_FILE, JSON.stringify(data));
-  await chmod(AUTH_FILE, 0o600);
+/** Changes auth.json under its lock: signing in to two servers at once keeps both. */
+function updateAuthFile(update: (data: AuthFile) => AuthFile): Promise<void> {
+  return withFileLock(AUTH_FILE, async () => writeFileAtomic(AUTH_FILE, JSON.stringify(update(await readAuthFile())), 0o600));
 }
 
 /** This machine's sign-in to `convexUrl`, by default the selected instance's. */
@@ -183,12 +183,11 @@ export async function readAuth(convexUrl = endpoints().convexUrl): Promise<Auth 
 
 export async function writeAuth(auth: Auth): Promise<void> {
   const { convexUrl, ...entry } = auth;
-  await writeAuthFile({ ...(await readAuthFile()), [convexUrl]: entry });
+  await updateAuthFile((data) => ({ ...data, [convexUrl]: entry }));
 }
 
 export async function clearAuth(convexUrl = endpoints().convexUrl): Promise<void> {
-  const { [convexUrl]: _, ...rest } = await readAuthFile();
-  await writeAuthFile(rest);
+  await updateAuthFile(({ [convexUrl]: _, ...rest }) => rest);
 }
 
 /** Device-style login: show a code, the user approves it on the web, we poll for a token. */

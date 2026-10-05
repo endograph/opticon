@@ -192,7 +192,7 @@ export const githubTokenForUser = internalQuery({
 
 function githubCredentials(user: Doc<"users"> | null) {
   return user ? {
-    userId: user._id, githubToken: user.githubToken,
+    userId: user._id, login: user.login, githubToken: user.githubToken,
     expiresAt: user.githubTokenExpiresAt,
     refreshToken: user.githubRefreshToken,
     refreshExpiresAt: user.githubRefreshTokenExpiresAt,

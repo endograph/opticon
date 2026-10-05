@@ -1,10 +1,13 @@
 import { useSyncExternalStore } from "react";
+import { config } from "../config";
 
 /**
  * Watch history for signed-out viewers, kept in this browser. Only slugs are stored; share details
  * are looked up from the server so they stay current. Signing in moves this into the account.
+ * Kept per server: the local app can switch servers, and one server's slugs mean nothing to
+ * another, which shouldn't learn them.
  */
-const KEY = "opticon_history";
+const key = () => `opticon_history:${config.convexUrl}`;
 const MAX_ENTRIES = 200;
 const listeners = new Set<() => void>();
 
@@ -20,7 +23,7 @@ let cachedRaw: string | null = null;
 let cached: LocalEntry[] = [];
 
 export function readLocalHistory(): LocalEntry[] {
-  const raw = localStorage.getItem(KEY);
+  const raw = localStorage.getItem(key());
   if (raw !== cachedRaw) {
     cachedRaw = raw;
     try {
@@ -44,8 +47,8 @@ function isEntry(e: unknown): e is LocalEntry {
 }
 
 function write(entries: LocalEntry[]): void {
-  if (entries.length) localStorage.setItem(KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
-  else localStorage.removeItem(KEY);
+  if (entries.length) localStorage.setItem(key(), JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+  else localStorage.removeItem(key());
   for (const l of listeners) l();
 }
 

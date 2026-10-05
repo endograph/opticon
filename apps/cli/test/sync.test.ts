@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { type SessionEvent, type SessionMeta, projectSessionForShare } from "@opticon/core";
 import { matches, normalizeRemote } from "../src/autosync";
 import { ShareSync } from "../src/daemon/sync";
+import { Syncs, UnknownInstanceError } from "../src/daemon/syncs";
 
 const INSTANCE = { name: "example.test", convexUrl: "https://example.convex.cloud", siteUrl: "https://example.convex.site", webUrl: "https://example.test" };
 import type { SessionMessage, SessionStore } from "../src/daemon/store";
@@ -181,4 +182,9 @@ test("a share the server says was deleted isn't offered to autosync again", asyn
   await expect(internals.autosync("claude/gone")).rejects.toThrow(/deleted/);
   await internals.autosync("claude/gone");
   expect(creates).toBe(1);
+});
+
+test("a request about a server that isn't set up here is refused, not sent to the selected one", () => {
+  const syncs = new Syncs({} as SessionStore);
+  expect(() => syncs.for("https://removed.convex.cloud")).toThrow(UnknownInstanceError);
 });

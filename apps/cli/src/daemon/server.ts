@@ -7,7 +7,7 @@ import { addRule, describeRule, newRule, removeRule, ruleTarget } from "../autos
 import { type SessionKey, SessionStore } from "./store";
 import { tailnetHostname } from "../tailscale";
 import type { ShareSync } from "./sync";
-import { Syncs } from "./syncs";
+import { Syncs, UnknownInstanceError } from "./syncs";
 
 const COOKIE = "opticon_local";
 
@@ -44,8 +44,17 @@ export async function startServer(options: DaemonOptions) {
       if (req.cookies.get(COOKIE) !== options.token) return Response.json({ error: "unauthorized" }, { status: 401 });
       // A custom header can't be sent cross-origin without a CORS preflight, which we never grant.
       if (req.method !== "GET" && req.headers.get("x-opticon") !== "1") return Response.json({ error: "csrf" }, { status: 403 });
-      return handler(req);
+      try {
+        return Promise.resolve(handler(req)).catch(unknownInstance);
+      } catch (error) {
+        return unknownInstance(error);
+      }
     };
+  /** A request about a server this machine no longer has; never answered by another server. */
+  const unknownInstance = (error: unknown): Response => {
+    if (error instanceof UnknownInstanceError) return Response.json({ error: error.message }, { status: 409 });
+    throw error;
+  };
 
   const failure = (error: unknown) => Response.json({ error: (error as Error).message }, { status: 400 });
   /**
@@ -121,7 +130,9 @@ export async function startServer(options: DaemonOptions) {
       "/api/sessions/stream": guard((req) =>
         sse(req.signal, (send) => {
           send({ type: "list", sessions: store.list() });
-          const sync = syncFor(req);
+          // A page on a removed server gets the selected one's state, which tells it to reload onto it.
+          const backend = new URL(req.url).searchParams.get("backend");
+          const sync = syncs.all().find((s) => s.instance.convexUrl === backend) ?? syncs.selected();
           send(shareState(sync));
           const offList = store.onList((change) => send({ type: "change", ...change }));
           const offShares = syncs.onChange(() => send(shareState(sync)));

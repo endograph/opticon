@@ -47,7 +47,7 @@ export default defineSchema({
     githubRefreshToken: v.optional(v.string()),
     githubRefreshTokenExpiresAt: v.optional(v.number()),
     githubRefreshUntil: v.optional(v.number()),
-    /** Cached membership, refreshed by access.refresh. */
+    /** Legacy: replaced by groupMembers. */
     orgs: v.optional(v.array(v.string())),
     teams: v.optional(v.array(v.string())),
     membershipCheckedAt: v.optional(v.number()),
@@ -159,6 +159,18 @@ export default defineSchema({
     private: v.boolean(),
     checkedAt: v.number(),
   }).index("by_repo", ["repo"]),
+
+  /**
+   * Whether a viewer is in a GitHub org (`acme`) or team (`acme/platform`), as GitHub last said,
+   * for org and team grants. Checked one grant at a time: GitHub won't list a user's orgs to
+   * GitHub App tokens. Non-membership is stored too.
+   */
+  groupMembers: defineTable({
+    userId: v.id("users"),
+    group: v.string(),
+    member: v.boolean(),
+    checkedAt: v.number(),
+  }).index("by_user_group", ["userId", "group"]),
 
   /** Whether a viewer can read a repo, as GitHub last said, for the `repo` grant. Denials are stored too. */
   repoReads: defineTable({
