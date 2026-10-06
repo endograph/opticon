@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { config, isLocal, placeLabel } from "./config";
 import { selectInstance } from "./local/api";
@@ -13,19 +13,45 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
   const active = props.route.name;
   // On narrow screens the sidebar is a drawer. Any navigation closes it.
   const [drawer, setDrawer] = useState(false);
+  const sidebar = useRef<HTMLElement>(null);
+  const menu = useRef<HTMLButtonElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
   const url = location.pathname + location.search;
   useEffect(() => setDrawer(false), [url]);
   useEffect(() => {
     if (!drawer) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setDrawer(false);
+    close.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawer(false);
+      if (e.key !== "Tab") return;
+      const controls = Array.from(sidebar.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+      ) ?? []).filter((el) => el.getClientRects().length && getComputedStyle(el).visibility === "visible");
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    };
+    const mobile = matchMedia("(max-width: 760px)");
+    const onResize = () => { if (!mobile.matches) setDrawer(false); };
+    mobile.addEventListener("change", onResize);
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
+    return () => {
+      mobile.removeEventListener("change", onResize);
+      removeEventListener("keydown", onKey);
+      menu.current?.focus();
+    };
   }, [drawer]);
 
   return (
     <div className="app" data-drawer={drawer || undefined}>
-      <header className="topbar">
-        <button type="button" className="menu-button" aria-label="Open navigation" aria-expanded={drawer} onClick={() => setDrawer(true)}>
+      <header className="topbar" inert={drawer}>
+        <button ref={menu} type="button" className="menu-button" aria-label="Open navigation" aria-controls="navigation" aria-expanded={drawer} onClick={() => setDrawer(true)}>
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M2 4h12M2 8h12M2 12h12" />
           </svg>
@@ -35,13 +61,16 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
         </Link>
       </header>
       <div className="drawer-scrim" onClick={() => setDrawer(false)} />
-      <nav className="sidebar">
+      <nav ref={sidebar} id="navigation" className="sidebar" aria-label="Navigation">
         <div className="sidebar-nav">
           <div className="brand-row">
             <Link href="/" className="brand">
               Opticon
             </Link>
             <ThemeButton />
+            <button ref={close} type="button" className="menu-button drawer-close" aria-label="Close navigation" onClick={() => setDrawer(false)}>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </div>
           {/* Where you are: this machine's local app, or opticon.tv. Same app either way. */}
           <div className={`place ${isLocal() ? "local" : "hosted"}`} title={isLocal() ? "Sessions on this machine" : undefined}>
@@ -72,7 +101,7 @@ export function Shell(props: { route: Route; sidebar?: ReactNode; children: Reac
           <AccountFooter />
         </div>
       </nav>
-      <main className="main">
+      <main className="main" inert={drawer}>
         {/* Keyed by URL so navigating away from a failed page retries. */}
         <ErrorBoundary key={location.pathname} fallback={<PageError />}>
           {props.children}
