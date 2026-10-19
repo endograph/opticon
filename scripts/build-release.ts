@@ -1,5 +1,6 @@
 // Builds release binaries for every supported platform into dist/release, each also gzipped
-// (what install.sh and `opticon update` download), plus SHA256SUMS covering every file.
+// (what install.sh and `opticon update` download), plus SHA256SUMS covering every file. The binary
+// for this machine's platform is then checked for a web UI a browser can load.
 // Usage: bun scripts/build-release.ts <version>   (e.g. 0.1.0, without the leading "v")
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -45,6 +46,12 @@ for (const target of TARGETS) {
 }
 
 await writeFile(join(OUT, "SHA256SUMS"), `${sums.join("\n")}\n`);
+
+const host = join(OUT, `opticon-${process.platform}-${process.arch}`);
+if (await Bun.file(host).exists()) {
+  const check = Bun.spawnSync(["bun", "scripts/check-web-bundle.ts", host], { cwd: ROOT, stdout: "inherit", stderr: "inherit" });
+  if (check.exitCode !== 0) process.exit(check.exitCode ?? 1);
+}
 console.log(`Built opticon ${version}:\n${sums.join("\n")}`);
 
 function sha256(data: Uint8Array): string {

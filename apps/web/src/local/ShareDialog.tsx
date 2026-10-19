@@ -1,4 +1,5 @@
-import { type SessionEvent, describeAccess } from "@opticon/core";
+import type { SessionEvent } from "@opticon/core";
+import { describeAccess } from "@opticon/core/protocol";
 import { useEffect, useRef, useState } from "react";
 import {
   type Account,

@@ -1,9 +1,9 @@
-import { PRIVATE_ACCESS, type ShareAccess } from "@opticon/core";
+import { PRIVATE_ACCESS, type ShareAccess } from "@opticon/core/protocol";
 import { api } from "@opticon/server/api";
 import { useQuery } from "convex/react";
 import { type ReactNode, useState } from "react";
 
-export { describeAccess, isPrivate } from "@opticon/core";
+export { describeAccess, isPrivate } from "@opticon/core/protocol";
 
 const list = (values: string[]) => values.join(", ");
 const parse = (text: string) => text.split(/[\s,]+/).filter(Boolean);
