@@ -160,6 +160,17 @@ pre,
   font-size: 18px;
 }
 
+.app-error {
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
 /* Sidebar */
 
 .sidebar {
