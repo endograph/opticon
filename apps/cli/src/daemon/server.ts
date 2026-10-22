@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import index from "@opticon/web/index.html";
 import { defaultAccess, endpoints, selectInstance } from "../account";
 import { addRule, describeRule, newRule, removeRule, ruleTarget } from "../autosync";
+import { artifactResponse } from "./artifacts";
 import { type SessionKey, SessionStore } from "./store";
 import { tailnetHostname } from "../tailscale";
 import type { ShareSync } from "./sync";
@@ -208,6 +209,13 @@ export async function startServer(options: DaemonOptions) {
         const cwd = store.get(sessionKey(req))?.cwd;
         const remote = cwd ? await syncFor(req).repoFor(cwd) : undefined;
         return Response.json({ repo: (remote && syncFor(req).githubRepo(remote)) ?? null });
+      }),
+
+      /** One artifact, raw and sandboxed: the app's iframe source, and its "open in a new tab" link. `?v=` picks a version. */
+      "/artifacts/:provider/:id/:artifactId": guard(async (req) => {
+        const result = await store.events(`${req.params.provider}/${req.params.id}` as SessionKey);
+        if (!result) return new Response("Session not found", { status: 404 });
+        return artifactResponse(result.events, String(req.params.artifactId), new URL(req.url).searchParams.get("v"));
       }),
 
       "/api/sessions/:provider/:id/share-preview": guard(async (req) => {

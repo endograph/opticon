@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { collectArtifacts } from "@opticon/core/artifacts";
+import { useEffect, useMemo, useState } from "react";
 import { isPrivate } from "../AccessEditor";
 import { Shell } from "../Shell";
 import { Transcript } from "../Transcript";
@@ -7,6 +8,7 @@ import { useIdentity } from "../identity";
 import { Link, type Route, navigate } from "../router";
 import { SessionList } from "./SessionList";
 import { ShareDialog } from "./ShareDialog";
+import { ArtifactPane, ArtifactsMenu, MissingArtifact, artifactLinks } from "./Artifacts";
 import { sessionKey, useSession, useSessionRepo } from "./api";
 import { projectHref } from "../shares/Discover";
 import { ProviderIcon } from "../ProviderIcon";
@@ -21,6 +23,10 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   const session = useSession(selected);
   const [sharing, setSharing] = useState(false);
   const githubUrl = useGithubUrl();
+  const artifacts = useMemo(() => collectArtifacts(session.events), [session.events]);
+  const links = useMemo(() => (selected ? artifactLinks(selected, artifacts) : undefined), [selected, artifacts]);
+  const openId = route.name === "local" ? route.artifact : undefined;
+  const open = openId ? artifacts.find((a) => a.id === openId) : undefined;
 
   const meta = session.meta ?? sessions.find((s) => sessionKey(s) === selected);
   // Private copies (unshared, or auto synced without sharing) aren't marked as shared.
@@ -30,8 +36,8 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
   const localRepo = useSessionRepo(selected);
   const repo = share?.repo ?? localRepo;
   useEffect(() => {
-    setPageTitle(meta?.title);
-  }, [meta?.title]);
+    setPageTitle(open?.title ?? meta?.title);
+  }, [open?.title, meta?.title]);
 
   return (
     <Shell
@@ -92,11 +98,19 @@ export function LocalSessions({ route, selected }: { route: Route; selected?: st
                 {share.viewers > 0 ? ` · ${share.viewers} watching` : ""}
               </a>
             )}
+            {artifacts.length > 0 && <ArtifactsMenu sessionKey={selected} artifacts={artifacts} />}
             <button type="button" className="button" disabled={session.status !== "ready"} onClick={() => setSharing(true)}>
               {share ? "Manage…" : "Share…"}
             </button>
           </header>
-          <Transcript key={selected} events={session.events} status={session.status} />
+          <div className="session-body" data-artifact={openId ? "" : undefined}>
+            <Transcript key={selected} events={session.events} status={session.status} artifacts={links} />
+            {open ? (
+              <ArtifactPane sessionKey={selected} artifact={open} version={route.name === "local" ? route.version : undefined} />
+            ) : (
+              openId && <MissingArtifact sessionKey={selected} loading={!session.meta} />
+            )}
+          </div>
           {sharing && <ShareDialog sessionKey={selected} share={share} account={account} onClose={() => setSharing(false)} />}
         </>
       )}

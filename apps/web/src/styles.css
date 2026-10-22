@@ -541,6 +541,152 @@ pre,
   padding: 24px 32px 64px;
 }
 
+/* Artifacts: open beside the transcript, or instead of it on narrower screens. */
+
+.session-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.session-body > .transcript {
+  min-width: 0;
+}
+
+.artifact-pane {
+  flex: 1.4;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 1100px) {
+  .session-body[data-artifact] > .transcript {
+    display: none;
+  }
+
+  .artifact-pane {
+    border-left: 0;
+  }
+}
+
+.artifact-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px 6px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  min-height: 41px;
+}
+
+.artifact-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.artifact-kind {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--dim);
+  font: 500 10.5px/16px var(--mono);
+  text-transform: uppercase;
+}
+
+.artifact-time {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.artifact-version {
+  font-size: 12px;
+  max-width: 180px;
+}
+
+a.popover-option,
+.artifact-action,
+.artifact-open {
+  text-decoration: none;
+}
+
+a.popover-option {
+  color: inherit;
+}
+
+.artifact-action {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--radius);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.artifact-action:hover {
+  background: var(--user-bg);
+  color: var(--text);
+}
+
+/* Pages written for a white page shouldn't turn up dark-on-dark. */
+.artifact-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-markdown {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding: 24px 32px 64px;
+}
+
+.artifact-markdown > .markdown {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.artifact-markdown .markdown h1 {
+  font-size: 22px;
+}
+
+.artifact-markdown .markdown h2 {
+  font-size: 18px;
+}
+
+.artifacts-menu {
+  position: relative;
+  display: flex;
+}
+
+.artifacts-menu .popover {
+  left: auto;
+  min-width: 280px;
+  max-width: 360px;
+}
+
+.artifact-open {
+  flex: none;
+  margin-left: auto;
+  padding: 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.artifact-open + .artifact-open {
+  margin-left: 0;
+}
+
+.artifact-open:hover {
+  text-decoration: underline;
+}
+
 .message {
   margin: 18px 0;
 }

@@ -3,6 +3,7 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Status } from "./local/api";
+import { Link } from "./router";
 
 const PAGE = 150;
 const COLLAPSED_ACTIVITY = 4;
@@ -12,6 +13,13 @@ type Block =
   | { type: "message"; event: MessageEvent }
   | { type: "notice"; event: NoticeEvent }
   | { type: "activity"; id: string; events: Step[] };
+
+/** An artifact a tool call produced, linked from its chip. */
+export interface ArtifactLink {
+  href: string;
+  title: string;
+}
+type Links = Map<string, ArtifactLink[]>;
 
 /** Consecutive tool calls and thinking collapse into one activity block between messages. */
 function toBlocks(events: SessionEvent[]): Block[] {
@@ -28,7 +36,7 @@ function toBlocks(events: SessionEvent[]): Block[] {
   return blocks;
 }
 
-export function Transcript({ events, status }: { events: SessionEvent[]; status: Status }) {
+export function Transcript({ events, status, artifacts }: { events: SessionEvent[]; status: Status; artifacts?: Links }) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [shown, setShown] = useState(PAGE);
@@ -61,14 +69,14 @@ export function Transcript({ events, status }: { events: SessionEvent[]; status:
         )}
         {!blocks.length && <p className="hint">No messages yet.</p>}
         {visible.map((block) => (
-          <BlockView key={block.type === "activity" ? block.id : block.event.id} block={block} />
+          <BlockView key={block.type === "activity" ? block.id : block.event.id} block={block} artifacts={artifacts} />
         ))}
       </div>
     </div>
   );
 }
 
-const BlockView = memo(function BlockView({ block }: { block: Block }) {
+const BlockView = memo(function BlockView({ block, artifacts }: { block: Block; artifacts?: Links }) {
   switch (block.type) {
     case "message":
       return block.event.role === "user" ? (
@@ -85,19 +93,28 @@ const BlockView = memo(function BlockView({ block }: { block: Block }) {
     case "notice":
       return <div className={`notice ${block.event.level}`}>{block.event.text}</div>;
     case "activity":
-      return <Activity events={block.events} />;
+      return <Activity events={block.events} artifacts={artifacts} />;
   }
 }, sameBlock);
 
-/** Blocks are rebuilt every render, but the events inside keep their identity until replaced. */
-function sameBlock({ block: a }: { block: Block }, { block: b }: { block: Block }): boolean {
+/**
+ * Blocks are rebuilt every render, but the events inside keep their identity until replaced.
+ * Artifact links are rebuilt too; compare the ones this block shows.
+ */
+function sameBlock(prev: { block: Block; artifacts?: Links }, next: { block: Block; artifacts?: Links }): boolean {
+  const a = prev.block;
+  const b = next.block;
   if (a.type === "activity" && b.type === "activity") {
-    return a.events.length === b.events.length && a.events.every((e, i) => e === b.events[i]);
+    const hrefs = (links: Links | undefined, id: string) => links?.get(id)?.map((l) => l.href).join(" ");
+    return (
+      a.events.length === b.events.length &&
+      a.events.every((e, i) => e === b.events[i] && hrefs(prev.artifacts, e.id) === hrefs(next.artifacts, e.id))
+    );
   }
   return a.type !== "activity" && b.type !== "activity" && a.event === b.event;
 }
 
-function Activity({ events }: { events: Step[] }) {
+function Activity({ events, artifacts }: { events: Step[]; artifacts?: Links }) {
   const [expanded, setExpanded] = useState(false);
   const hidden = expanded ? 0 : Math.max(0, events.length - COLLAPSED_ACTIVITY);
   return (
@@ -108,7 +125,7 @@ function Activity({ events }: { events: Step[] }) {
         </button>
       )}
       {events.slice(hidden).map((e) =>
-        e.kind === "thinking" ? <Thinking key={e.id} text={e.text} /> : <ToolChip key={e.id} tool={e} />,
+        e.kind === "thinking" ? <Thinking key={e.id} text={e.text} /> : <ToolChip key={e.id} tool={e} artifacts={artifacts?.get(e.id)} />,
       )}
     </div>
   );
@@ -128,13 +145,18 @@ function Thinking({ text }: { text: string }) {
 
 const STATUS_ICON = { running: "◌", ok: "✓", error: "✕" } as const;
 
-function ToolChip({ tool }: { tool: ToolEvent }) {
+function ToolChip({ tool, artifacts }: { tool: ToolEvent; artifacts?: ArtifactLink[] }) {
   const hasDetail = tool.input !== undefined || !!tool.output;
   const head = (
     <>
       <span className={`step-icon status-${tool.status}`}>{STATUS_ICON[tool.status]}</span>
       <span className={`tool-name cat-${tool.category}`}>{tool.name}</span>
       {tool.summary && <span className="truncate mono dim">{tool.summary}</span>}
+      {artifacts?.map((a) => (
+        <Link key={a.href} className="artifact-open" href={a.href} title={`Open ${a.title}`}>
+          Open{artifacts.length > 1 ? ` ${a.title}` : ""}
+        </Link>
+      ))}
     </>
   );
   if (!hasDetail) return <div className="step">{head}</div>;

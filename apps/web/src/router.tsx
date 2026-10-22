@@ -2,8 +2,8 @@ import { type AnchorHTMLAttributes, useSyncExternalStore } from "react";
 
 export type Route =
   | { name: "home" }
-  /** Sessions on this machine; `key` is `<provider>/<id>`. */
-  | { name: "local"; key?: string }
+  /** Sessions on this machine; `key` is `<provider>/<id>`. `version` is 1-based; absent means the latest. */
+  | { name: "local"; key?: string; artifact?: string; version?: number }
   | { name: "share"; slug: string }
   | { name: "shares" }
   | { name: "following" }
@@ -21,8 +21,12 @@ export type Route =
 export function parseRoute(path: string, search: string): Route {
   if (path === "/") return { name: "home" };
   if (path === "/local") return { name: "local" };
-  const local = path.match(/^\/local\/(\w+\/[\w-]+)$/);
-  if (local?.[1]) return { name: "local", key: local[1] };
+  const local = path.match(/^\/local\/(\w+\/[\w-]+)(?:\/a\/([\w-]+))?$/);
+  if (local?.[1]) {
+    if (!local[2]) return { name: "local", key: local[1] };
+    const version = Number(new URLSearchParams(search).get("v")) || undefined;
+    return { name: "local", key: local[1], artifact: local[2], version };
+  }
   const share = path.match(/^\/s\/([\w-]+)$/);
   if (share?.[1]) return { name: "share", slug: share[1] };
   if (path === "/shares") return { name: "shares" };
