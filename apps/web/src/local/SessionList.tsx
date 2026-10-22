@@ -40,7 +40,10 @@ export function SessionList(props: {
       (s) =>
         (provider === "all" || s.provider === provider) &&
         (!projects.size || (s.cwd !== undefined && projects.has(s.cwd))) &&
-        (!q || s.title?.toLowerCase().includes(q) || s.cwd?.toLowerCase().includes(q)),
+        (!q ||
+          s.title?.toLowerCase().includes(q) ||
+          s.cwd?.toLowerCase().includes(q) ||
+          s.id.toLowerCase().includes(q)),
     );
   }, [props.sessions, query, provider, projects]);
 
@@ -85,7 +88,7 @@ export function SessionList(props: {
         {searching && (
           <input
             className="search"
-            placeholder="Search sessions"
+            placeholder="Search by title, path or session id"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && closeSearch()}

@@ -1,9 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { projectName } from "../format";
 
 export interface Project {
   cwd: string;
   sessions: number;
+}
+
+/**
+ * Scores `text` against `query` as an in-order, case-insensitive subsequence, or null when it isn't one.
+ * Consecutive letters and letters at the start of a word score higher; shorter texts win ties.
+ */
+function fuzzyScore(query: string, text: string): number | null {
+  const t = text.toLowerCase();
+  let score = 0;
+  let from = 0;
+  let prev = -2;
+  for (const ch of query) {
+    const i = t.indexOf(ch, from);
+    if (i < 0) return null;
+    score += 1 + (i === prev + 1 ? 2 : 0) + (i === 0 || /[^a-z0-9]/.test(t[i - 1]!) ? 2 : 0);
+    prev = i;
+    from = i + 1;
+  }
+  return score - t.length / 1000;
+}
+
+/** Projects matching `query`, best first. A match on the project's name outranks one on its full path. */
+function searchProjects(projects: Project[], query: string): Project[] {
+  const q = query.toLowerCase().replace(/\s+/g, "");
+  if (!q) return projects;
+  return projects
+    .flatMap((p) => {
+      const name = fuzzyScore(q, projectName(p.cwd));
+      const score = name !== null ? name + 1000 : fuzzyScore(q, p.cwd);
+      return score === null ? [] : [{ p, score }];
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((m) => m.p);
 }
 
 /** Icon button that opens a multi-select list of projects. Selection is keyed by directory. */
@@ -13,10 +46,11 @@ export function ProjectPicker(props: {
   onChange: (selected: Set<string>) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return setQuery("");
     const onPointer = (e: PointerEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -28,6 +62,8 @@ export function ProjectPicker(props: {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  const matches = useMemo(() => searchProjects(props.projects, query), [props.projects, query]);
 
   const toggle = (cwd: string) => {
     const next = new Set(props.selected);
@@ -53,9 +89,21 @@ export function ProjectPicker(props: {
       </button>
       {open && (
         <div className="popover" role="group" aria-label="Projects">
+          {props.projects.length > 0 && (
+            <input
+              className="search popover-search"
+              placeholder="Find a project"
+              aria-label="Find a project"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && matches[0] && toggle(matches[0].cwd)}
+              autoFocus
+            />
+          )}
           {!props.projects.length && <p className="hint">No projects yet.</p>}
+          {props.projects.length > 0 && !matches.length && <p className="hint">No projects match.</p>}
           <div className="popover-list">
-            {props.projects.map((p) => (
+            {matches.map((p) => (
               <label key={p.cwd} className="popover-option" title={p.cwd}>
                 <input type="checkbox" checked={props.selected.has(p.cwd)} onChange={() => toggle(p.cwd)} />
                 <span className="truncate">{projectName(p.cwd)}</span>
